@@ -418,8 +418,10 @@ async function fetchXirrHistory(){
         if(!row || row.length < 2) continue;
         const d = parseSheetDate(row[0]);
         const amt = parseFloat((row[1] || '').replace(/[,₹\s]/g, '')); // strip thousands separators / currency symbols
-        // Only keep dated rows — this naturally skips a trailing "total" row with no date.
-        if(d && isFinite(amt)) cashflows.push({date: d, amount: amt});
+        // Only keep dated, negative (invested) rows — a positive row is your running
+        // "current total" placeholder, which we replace with the live value instead
+        // so it's never double-counted alongside today's live figure.
+        if(d && isFinite(amt) && amt < 0) cashflows.push({date: d, amount: amt});
       }
       if(cashflows.length) return cashflows;
     }catch(err){ /* try next candidate */ }
