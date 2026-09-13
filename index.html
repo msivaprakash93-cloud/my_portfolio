@@ -76,7 +76,7 @@
 
   /* KPI strip */
   .kpis{
-    display:grid; grid-template-columns: repeat(4, 1fr); gap:1px;
+    display:grid; grid-template-columns: repeat(5, 1fr); gap:1px;
     background: var(--line); border:1px solid var(--line); margin-bottom: 28px;
   }
   .kpi{ background: var(--surface); padding: 16px 18px; }
@@ -128,6 +128,7 @@
 
   @media (max-width: 640px){
     .kpis{ grid-template-columns: repeat(2,1fr); }
+    .kpi.xirr{ grid-column: span 2; }
     .headline-value{ text-align:left; }
     header{ flex-direction:column; align-items:flex-start; }
     table{ font-size:12.5px; }
@@ -169,9 +170,17 @@
         <input type="text" id="gidInput" placeholder="0">
       </div>
     </div>
+    <div class="row">
+      <div class="field">
+        <label>XIRR cash-flow tab (gid)</label>
+        <input type="text" id="xirrGidInput" placeholder="1257294586">
+      </div>
+    </div>
     <div class="hint">
       Your sheet must be published to the web: File → Share → Publish to web → select the <strong>PORTFOLIO</strong> tab → Publish.
       If prices don't update, your <em>gid</em> may point to the wrong tab — open the sheet, click the PORTFOLIO tab, and copy the number after <code>gid=</code> in the browser URL.
+      <br><br>
+      The <strong>XIRR cash-flow tab</strong> should have no header row: column A = a date, column B = the cash flow for that date (negative for money invested). Add a new monthly row whenever you invest, and the dashboard will fold it into XIRR automatically using your live current portfolio value as the final inflow.
     </div>
     <div class="btnrow">
       <button id="saveSettingsBtn">Save &amp; reload</button>
@@ -183,6 +192,7 @@
     <div class="kpi"><div class="label">INVESTED</div><div class="value num" id="kpiInvested">—</div></div>
     <div class="kpi"><div class="label">CURRENT VALUE</div><div class="value num" id="kpiCurrent">—</div></div>
     <div class="kpi"><div class="label">P&amp;L</div><div class="value num" id="kpiPnl">—</div><div class="sub num" id="kpiPnlPct">—</div></div>
+    <div class="kpi xirr"><div class="label">XIRR</div><div class="value num" id="kpiXirr">—</div><div class="sub" id="kpiXirrSub">—</div></div>
     <div class="kpi"><div class="label">HOLDINGS</div><div class="value num" id="kpiCount">—</div><div class="sub" id="kpiUpdated">—</div></div>
   </div>
 
@@ -225,6 +235,8 @@ let lastGoodFetch = null;
 let usingLive = false;
 let pubId = "2PACX-1vSYC-gajROTX1UE86rRbRwoNs-YVmWwJ3nlmkG4E9_GBX-oinph3IMsM8J0IJTwyIfo7pavko4pvQrj";
 let gid = "677934220";
+let xirrGid = "1257294586";
+let xirrHistory = null; // [{date, amount}] loaded from the XIRR cash-flow tab
 
 const fmt = n => "₹" + Number(n).toLocaleString('en-IN', {maximumFractionDigits:0});
 const fmt2 = n => Number(n).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
@@ -238,6 +250,7 @@ async function loadSettings(){
       const cfg = JSON.parse(r.value);
       if(cfg.pubId) pubId = cfg.pubId;
       if(cfg.gid !== undefined) gid = cfg.gid;
+      if(cfg.xirrGid !== undefined) xirrGid = cfg.xirrGid;
     }
   }catch(e){ /* no config saved yet */ }
   try{
@@ -246,11 +259,13 @@ async function loadSettings(){
   }catch(e){ /* none hidden yet */ }
   el('pubIdInput').value = pubId;
   el('gidInput').value = gid;
+  el('xirrGidInput').value = xirrGid;
 }
-async function saveSettings(newPubId, newGid){
+async function saveSettings(newPubId, newGid, newXirrGid){
   pubId = newPubId.trim();
   gid = newGid.trim() || "0";
-  try{ await window.storage.set('sheet-config', JSON.stringify({pubId, gid}), false); }catch(e){}
+  xirrGid = (newXirrGid || "").trim() || xirrGid;
+  try{ await window.storage.set('sheet-config', JSON.stringify({pubId, gid, xirrGid}), false); }catch(e){}
 }
 async function saveHidden(){
   try{ await window.storage.set('hidden-stocks', JSON.stringify([...hiddenSet]), false); }catch(e){}
@@ -358,6 +373,89 @@ async function fetchLive(){
   render();
 }
 
+async function fetchAll(){
+  await fetchLive();
+  refreshXirrHistory(); // independent fetch; don't block price refresh on it
+}
+
+/* ---------- XIRR ---------- */
+function parseSheetDate(str){
+  str = (str || '').trim();
+  if(!str) return null;
+  const m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); // M/D/YYYY as published by Sheets
+  if(m){
+    const month = parseInt(m[1],10)-1, day = parseInt(m[2],10), year = parseInt(m[3],10);
+    const d = new Date(year, month, day);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function xirrGidCsvUrl(){
+  return `https://docs.google.com/spreadsheets/d/e/${pubId}/pub?gid=${encodeURIComponent(xirrGid)}&single=true&output=csv&_=${Date.now()}`;
+}
+function xirrCandidateUrls(){
+  const target = xirrGidCsvUrl();
+  return [
+    target,
+    `https://corsproxy.io/?url=${encodeURIComponent(target)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(target)}`
+  ];
+}
+async function fetchXirrHistory(){
+  const urls = xirrCandidateUrls();
+  for(const url of urls){
+    try{
+      const res = await fetch(url, {cache:'no-store'});
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      const text = await res.text();
+      if(text.trim().startsWith('<')) throw new Error('not published');
+      const rows = parseCSV(text);
+      const cashflows = [];
+      for(const row of rows){
+        if(!row || row.length < 2) continue;
+        const d = parseSheetDate(row[0]);
+        const amt = parseFloat(row[1]);
+        // Only keep dated rows — this naturally skips a trailing "total" row with no date.
+        if(d && isFinite(amt)) cashflows.push({date: d, amount: amt});
+      }
+      if(cashflows.length) return cashflows;
+    }catch(err){ /* try next candidate */ }
+  }
+  return null;
+}
+
+// Newton-Raphson XIRR on {date, amount} cash flows (amount<0 = invested, amount>0 = value/withdrawn).
+function computeXirr(cashflows){
+  if(!cashflows || cashflows.length < 2) return null;
+  const sorted = [...cashflows].sort((a,b) => a.date - b.date);
+  const d0 = sorted[0].date;
+  const years = cf => (cf.date - d0) / (1000*60*60*24*365);
+  const npv = rate => sorted.reduce((sum,cf) => sum + cf.amount / Math.pow(1+rate, years(cf)), 0);
+  const dNpv = rate => sorted.reduce((sum,cf) => {
+    const t = years(cf);
+    return sum - (t * cf.amount) / Math.pow(1+rate, t+1);
+  }, 0);
+  let rate = 0.15;
+  for(let i=0;i<100;i++){
+    const f = npv(rate);
+    const df = dNpv(rate);
+    if(Math.abs(df) < 1e-9) break;
+    const next = rate - f/df;
+    if(!isFinite(next)) return null;
+    if(Math.abs(next - rate) < 1e-7){ rate = next; break; }
+    rate = next;
+  }
+  return isFinite(rate) ? rate * 100 : null;
+}
+
+async function refreshXirrHistory(){
+  const hist = await fetchXirrHistory();
+  if(hist && hist.length){ xirrHistory = hist; render(); }
+}
+
 function setStatus(state, msg){
   const dot = el('statusDot'), text = el('statusText');
   dot.className = 'dot';
@@ -397,6 +495,22 @@ function render(){
   el('kpiPnlPct').textContent = (totPct>=0?'+':'') + totPct.toFixed(2) + '%';
   el('kpiCount').textContent = visible.length;
   el('kpiUpdated').textContent = usingLive ? 'from live sheet' : 'from snapshot';
+
+  if(xirrHistory && xirrHistory.length){
+    const cashflows = [...xirrHistory, {date: new Date(), amount: totCurrent}];
+    const rate = computeXirr(cashflows);
+    if(rate === null){
+      el('kpiXirr').textContent = '—';
+      el('kpiXirrSub').textContent = 'could not compute';
+    } else {
+      el('kpiXirr').textContent = (rate>=0?'+':'') + rate.toFixed(2) + '%';
+      el('kpiXirr').className = 'value num ' + (rate>=0?'up':'down');
+      el('kpiXirrSub').textContent = 'annualized, since ' + xirrHistory[0].date.toLocaleDateString('en-IN', {month:'short', year:'numeric'});
+    }
+  } else {
+    el('kpiXirr').textContent = '—';
+    el('kpiXirrSub').textContent = 'loading…';
+  }
 
   const tbody = el('tableBody');
   tbody.innerHTML = filtered.map(h => `
@@ -450,19 +564,19 @@ el('searchInput').addEventListener('input', render);
 el('settingsBtn').addEventListener('click', () => el('settingsPanel').classList.toggle('open'));
 el('closeSettingsBtn').addEventListener('click', () => el('settingsPanel').classList.remove('open'));
 el('saveSettingsBtn').addEventListener('click', async () => {
-  await saveSettings(el('pubIdInput').value, el('gidInput').value);
+  await saveSettings(el('pubIdInput').value, el('gidInput').value, el('xirrGidInput').value);
   el('settingsPanel').classList.remove('open');
-  fetchLive();
+  fetchAll();
 });
-el('refreshBtn').addEventListener('click', fetchLive);
+el('refreshBtn').addEventListener('click', fetchAll);
 
 /* ---------- Init ---------- */
 (async function init(){
   await loadSettings();
   setStatus('idle');
   render();
-  fetchLive();
-  setInterval(fetchLive, REFRESH_MS);
+  fetchAll();
+  setInterval(fetchAll, REFRESH_MS);
 })();
 
 if ('serviceWorker' in navigator) {
