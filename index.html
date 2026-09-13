@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ledger — Portfolio</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0F1512">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ledger">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png" type="image/png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #0F1512;
+    --surface: #161D19;
+    --surface-2: #1C2521;
+    --line: #2A342E;
+    --text: #EAEDE7;
+    --muted: #8B968E;
+    --faint: #5C665F;
+    --up: #4CAF6D;
+    --up-dim: #274430;
+    --down: #E1615B;
+    --down-dim: #452424;
+    --gold: #C9A227;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Source Serif 4', serif;
+    min-height: 100vh;
+    padding: 28px 20px 80px;
+  }
+  .num{ font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
+  .wrap{ max-width: 1100px; margin: 0 auto; }
+
+  /* Header */
+  header{
+    display:flex; justify-content:space-between; align-items:flex-end;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 20px; margin-bottom: 24px;
+    gap: 16px; flex-wrap: wrap;
+  }
+  .brand{ display:flex; flex-direction:column; gap:4px; }
+  .brand .mark{ font-size:13px; letter-spacing:0.02em; color: var(--gold); }
+  .brand h1{ font-size: 28px; font-weight:600; }
+  .headline-value{ text-align:right; }
+  .headline-value .amt{ font-size:34px; font-weight:600; line-height:1; }
+  .headline-value .delta{ font-size:15px; margin-top:6px; }
+  .up{ color: var(--up); }
+  .down{ color: var(--down); }
+
+  /* Status bar */
+  .statusbar{
+    display:flex; align-items:center; justify-content:space-between;
+    font-size: 13px; color: var(--muted); margin-bottom: 24px; flex-wrap:wrap; gap:10px;
+  }
+  .statusbar .dot{ display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--faint); margin-right:6px; }
+  .statusbar .dot.live{ background: var(--up); box-shadow:0 0 0 3px var(--up-dim); }
+  .statusbar .dot.stale{ background: var(--gold); box-shadow:0 0 0 3px #3a301355; }
+  .statusbar .dot.error{ background: var(--down); box-shadow:0 0 0 3px var(--down-dim); }
+  .actions{ display:flex; gap:10px; align-items:center; }
+  button{
+    font-family:'IBM Plex Mono', monospace; font-size:12px; letter-spacing:0.02em;
+    background: var(--surface-2); color: var(--text); border:1px solid var(--line);
+    padding:7px 12px; border-radius:3px; cursor:pointer;
+  }
+  button:hover{ border-color: var(--gold); }
+  button:focus-visible, a:focus-visible{ outline: 2px solid var(--gold); outline-offset:2px; }
+
+  /* KPI strip */
+  .kpis{
+    display:grid; grid-template-columns: repeat(4, 1fr); gap:1px;
+    background: var(--line); border:1px solid var(--line); margin-bottom: 28px;
+  }
+  .kpi{ background: var(--surface); padding: 16px 18px; }
+  .kpi .label{ font-size:12px; color: var(--muted); font-family:'IBM Plex Mono',monospace; }
+  .kpi .value{ font-size:21px; margin-top:8px; font-weight:600; }
+  .kpi .sub{ font-size:12.5px; margin-top:4px; color:var(--muted); }
+
+  /* Table */
+  .ledger-head{ display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:12px; flex-wrap:wrap;}
+  .ledger-head h2{ font-size:17px; font-weight:600; }
+  input[type=text]{
+    font-family:'IBM Plex Mono',monospace; font-size:12.5px; background:var(--surface-2);
+    border:1px solid var(--line); color:var(--text); padding:7px 10px; border-radius:3px; width:180px;
+  }
+  table{ width:100%; border-collapse:collapse; font-size:14px; }
+  thead th{
+    text-align:right; font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--muted);
+    font-weight:500; padding:8px 10px; border-bottom:1px solid var(--line); cursor:pointer; white-space:nowrap;
+  }
+  thead th:first-child, thead th:nth-child(2){ text-align:left; cursor:default;}
+  thead th.sortable:hover{ color:var(--text); }
+  tbody td{ padding:10px 10px; border-bottom:1px solid var(--line); text-align:right; white-space:nowrap; }
+  tbody td:first-child{ text-align:left; font-weight:500; }
+  tbody td:nth-child(2){ text-align:left; color:var(--muted); font-size:12.5px; }
+  tbody tr:hover{ background: var(--surface-2); }
+  .hide-btn{ background:none; border:none; color:var(--faint); font-size:14px; padding:0 4px; cursor:pointer; }
+  .hide-btn:hover{ color:var(--down); }
+  .pct-pill{ display:inline-block; padding:2px 7px; border-radius:3px; font-size:12.5px; }
+  .pct-pill.up{ background:var(--up-dim); }
+  .pct-pill.down{ background:var(--down-dim); }
+
+  .hidden-note{ font-size:12.5px; color:var(--muted); margin-top:14px; }
+  .hidden-note button{ padding:3px 8px; margin-left:6px;}
+
+  /* Settings panel */
+  .settings{
+    background: var(--surface); border:1px solid var(--line); padding:18px 20px;
+    margin-bottom:24px; display:none; gap:14px; flex-direction:column;
+  }
+  .settings.open{ display:flex; }
+  .settings label{ font-size:12px; color:var(--muted); font-family:'IBM Plex Mono',monospace; display:block; margin-bottom:5px; }
+  .settings .row{ display:flex; gap:14px; flex-wrap:wrap; }
+  .settings .field{ flex:1; min-width:220px; }
+  .settings input[type=text]{ width:100%; }
+  .settings .hint{ font-size:12px; color:var(--faint); margin-top:6px; line-height:1.5; }
+  .settings .btnrow{ display:flex; gap:10px; }
+
+  footer{ text-align:center; color:var(--faint); font-size:12px; margin-top:40px; font-family:'IBM Plex Mono',monospace; }
+
+  @media (max-width: 640px){
+    .kpis{ grid-template-columns: repeat(2,1fr); }
+    .headline-value{ text-align:left; }
+    header{ flex-direction:column; align-items:flex-start; }
+    table{ font-size:12.5px; }
+    thead th:nth-child(2), tbody td:nth-child(2){ display:none; }
+  }
+  @media (prefers-reduced-motion: reduce){ *{ transition:none !important; animation:none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">
+      <div class="mark">LEDGER</div>
+      <h1>Portfolio</h1>
+    </div>
+    <div class="headline-value">
+      <div class="amt num" id="hdrValue">₹0</div>
+      <div class="delta num" id="hdrDelta">—</div>
+    </div>
+  </header>
+
+  <div class="statusbar">
+    <div><span class="dot" id="statusDot"></span><span id="statusText">Loading…</span></div>
+    <div class="actions">
+      <button id="refreshBtn">Refresh now</button>
+      <button id="settingsBtn">Sheet settings</button>
+    </div>
+  </div>
+
+  <div class="settings" id="settingsPanel">
+    <div class="row">
+      <div class="field">
+        <label>Published sheet ID (from your pubhtml link)</label>
+        <input type="text" id="pubIdInput" placeholder="2PACX-1v...">
+      </div>
+      <div class="field">
+        <label>Tab (gid) — 0 is usually the first tab</label>
+        <input type="text" id="gidInput" placeholder="0">
+      </div>
+    </div>
+    <div class="hint">
+      Your sheet must be published to the web: File → Share → Publish to web → select the <strong>PORTFOLIO</strong> tab → Publish.
+      If prices don't update, your <em>gid</em> may point to the wrong tab — open the sheet, click the PORTFOLIO tab, and copy the number after <code>gid=</code> in the browser URL.
+    </div>
+    <div class="btnrow">
+      <button id="saveSettingsBtn">Save &amp; reload</button>
+      <button id="closeSettingsBtn">Close</button>
+    </div>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="label">INVESTED</div><div class="value num" id="kpiInvested">—</div></div>
+    <div class="kpi"><div class="label">CURRENT VALUE</div><div class="value num" id="kpiCurrent">—</div></div>
+    <div class="kpi"><div class="label">P&amp;L</div><div class="value num" id="kpiPnl">—</div><div class="sub num" id="kpiPnlPct">—</div></div>
+    <div class="kpi"><div class="label">HOLDINGS</div><div class="value num" id="kpiCount">—</div><div class="sub" id="kpiUpdated">—</div></div>
+  </div>
+
+  <div class="ledger-head">
+    <h2>Holdings</h2>
+    <input type="text" id="searchInput" placeholder="Search a stock…">
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Stock</th>
+        <th></th>
+        <th class="sortable" data-key="qty">Qty</th>
+        <th class="sortable" data-key="avgPrice">Avg Buy</th>
+        <th class="sortable" data-key="ltp">LTP</th>
+        <th class="sortable" data-key="invested">Invested</th>
+        <th class="sortable" data-key="curVal">Current</th>
+        <th class="sortable" data-key="pct">P&amp;L %</th>
+      </tr>
+    </thead>
+    <tbody id="tableBody"></tbody>
+  </table>
+  <div class="hidden-note" id="hiddenNote" style="display:none;"></div>
+
+  <footer id="footerNote">Data sourced from your Google Sheet (PORTFOLIO tab), refreshed every 2 minutes while this page is open.</footer>
+</div>
+
+<script>
+/* ---------- Embedded snapshot (from your uploaded sheet) — used until a live fetch succeeds ---------- */
+const SNAPSHOT = [{"name": "AMARAJ", "qty": 138.0, "avgPrice": 645.1848, "ltp": 831.0, "invested": 89035.5, "curVal": 114678.0, "pnl": 25642.5, "pct": 28.8003}, {"name": "WIPRO", "qty": 367.0, "avgPrice": 196.8804, "ltp": 167.2, "invested": 72255.1, "curVal": 61362.4, "pnl": -10892.7, "pct": -15.0753}, {"name": "PGINVIT", "qty": 350.0, "avgPrice": 98.3314, "ltp": 102.35, "invested": 34416.0, "curVal": 35822.5, "pnl": 1406.5, "pct": 4.0868}, {"name": "IDFC", "qty": 3671.0, "avgPrice": 68.788, "ltp": 86.04, "invested": 252520.8, "curVal": 315852.84, "pnl": 63332.04, "pct": 25.0799}, {"name": "NATCOPHARM", "qty": 667.0, "avgPrice": 1060.5207, "ltp": 825.75, "invested": 707367.32, "curVal": 550775.25, "pnl": -156592.07, "pct": -22.1373}, {"name": "AXISBANK", "qty": 11.0, "avgPrice": 1227.5, "ltp": 1242.0, "invested": 13502.5, "curVal": 13662.0, "pnl": 159.5, "pct": 1.1813}, {"name": "MHRIL", "qty": 44.0, "avgPrice": 218.5, "ltp": 199.3, "invested": 9614.0, "curVal": 8769.2, "pnl": -844.8, "pct": -8.7872}, {"name": "SHARDACROP", "qty": 18.0, "avgPrice": 803.4, "ltp": 783.0, "invested": 14461.2, "curVal": 14094.0, "pnl": -367.2, "pct": -2.5392}, {"name": "MUTHOOTFIN", "qty": 8.0, "avgPrice": 2872.8, "ltp": 2823.0, "invested": 22982.4, "curVal": 22584.0, "pnl": -398.4, "pct": -1.7335}, {"name": "KTKBANK", "qty": 1574.0, "avgPrice": 214.4, "ltp": 330.7, "invested": 337465.6, "curVal": 520521.8, "pnl": 183056.2, "pct": 54.2444}, {"name": "HDFC", "qty": 237.0, "avgPrice": 735.0, "ltp": 690.15, "invested": 174195.0, "curVal": 163565.55, "pnl": -10629.45, "pct": -6.102}, {"name": "HERO", "qty": 7.0, "avgPrice": 4854.0, "ltp": 5231.0, "invested": 33978.0, "curVal": 36617.0, "pnl": 2639.0, "pct": 7.7668}, {"name": "KALYANKJIL", "qty": 81.0, "avgPrice": 352.2, "ltp": 608.0, "invested": 28528.2, "curVal": 49248.0, "pnl": 20719.8, "pct": 72.6292}, {"name": "MVGJL", "qty": 50.0, "avgPrice": 142.75, "ltp": 215.0, "invested": 7137.5, "curVal": 10750.0, "pnl": 3612.5, "pct": 50.613}, {"name": "Zydus", "qty": 39.0, "avgPrice": 639.1872, "ltp": 1130.9, "invested": 24928.3, "curVal": 44105.1, "pnl": 19176.8, "pct": 76.9278}, {"name": "CIPLA", "qty": 24.0, "avgPrice": 1322.9, "ltp": 1370.2, "invested": 31749.6, "curVal": 32884.8, "pnl": 1135.2, "pct": 3.5755}, {"name": "FINCABLES", "qty": 10.0, "avgPrice": 717.0, "ltp": 1346.0, "invested": 7170.0, "curVal": 13460.0, "pnl": 6290.0, "pct": 87.7266}, {"name": "TMPV", "qty": 709.0, "avgPrice": 455.2, "ltp": 303.55, "invested": 322736.8, "curVal": 215216.95, "pnl": -107519.85, "pct": -33.315}, {"name": "TMCV", "qty": 586.0, "avgPrice": 242.7, "ltp": 444.0, "invested": 142222.2, "curVal": 260184.0, "pnl": 117961.8, "pct": 82.9419}, {"name": "TMB", "qty": 263.0, "avgPrice": 479.4, "ltp": 920.05, "invested": 126082.2, "curVal": 241973.15, "pnl": 115890.95, "pct": 91.917}, {"name": "ITC", "qty": 1068.0, "avgPrice": 340.3241, "ltp": 261.2, "invested": 363466.1, "curVal": 278961.6, "pnl": -84504.5, "pct": -23.2496}, {"name": "HCL TECH", "qty": 25.0, "avgPrice": 1219.0, "ltp": 1226.55, "invested": 30475.0, "curVal": 30663.75, "pnl": 188.75, "pct": 0.6194}, {"name": "TCS", "qty": 26.0, "avgPrice": 2424.8, "ltp": 2209.0, "invested": 63044.8, "curVal": 57434.0, "pnl": -5610.8, "pct": -8.8997}, {"name": "INFY", "qty": 52.0, "avgPrice": 1342.2, "ltp": 1035.0, "invested": 69794.4, "curVal": 53820.0, "pnl": -15974.4, "pct": -22.8878}, {"name": "TEJASNET", "qty": 16.0, "avgPrice": 475.5, "ltp": 576.05, "invested": 7608.0, "curVal": 9216.8, "pnl": 1608.8, "pct": 21.1462}, {"name": "INDUSINDBK", "qty": 452.0, "avgPrice": 779.3, "ltp": 998.0, "invested": 352243.6, "curVal": 451096.0, "pnl": 98852.4, "pct": 28.0636}, {"name": "MANAPPURAM", "qty": 1988.0, "avgPrice": 174.9806, "ltp": 320.0, "invested": 347861.36, "curVal": 636160.0, "pnl": 288298.64, "pct": 82.8775}, {"name": "SOUTHBANK", "qty": 16653.0, "avgPrice": 27.06, "ltp": 46.5, "invested": 450629.46, "curVal": 774364.5, "pnl": 323735.04, "pct": 71.8406}, {"name": "SPANDANA", "qty": 507.0, "avgPrice": 242.6, "ltp": 233.08, "invested": 122998.2, "curVal": 118171.56, "pnl": -4826.64, "pct": -3.9242}, {"name": "JYOTHYLAB", "qty": 531.0, "avgPrice": 264.1, "ltp": 195.0, "invested": 140237.1, "curVal": 103545.0, "pnl": -36692.1, "pct": -26.1643}, {"name": "DRREDDY", "qty": 212.0, "avgPrice": 1180.033, "ltp": 1145.8, "invested": 250167.0, "curVal": 242909.6, "pnl": -7257.4, "pct": -2.901}, {"name": "GLOBUSSPR", "qty": 24.0, "avgPrice": 868.8, "ltp": 848.0, "invested": 20851.2, "curVal": 20352.0, "pnl": -499.2, "pct": -2.3941}, {"name": "HDBFS", "qty": 20.0, "avgPrice": 740.0, "ltp": 675.0, "invested": 14800.0, "curVal": 13500.0, "pnl": -1300.0, "pct": -8.7838}, {"name": "PETRONET", "qty": 95.0, "avgPrice": 207.6316, "ltp": 285.85, "invested": 19725.0, "curVal": 27155.75, "pnl": 7430.75, "pct": 37.6717}, {"name": "PRICOLLTD", "qty": 15.0, "avgPrice": 336.0, "ltp": 746.5, "invested": 5040.0, "curVal": 11197.5, "pnl": 6157.5, "pct": 122.1726}, {"name": "BAJAJ AUTO", "qty": 6.0, "avgPrice": 5057.5, "ltp": 11780.0, "invested": 30345.0, "curVal": 70680.0, "pnl": 40335.0, "pct": 132.9214}];
+const SNAPSHOT_TIME = "the file you uploaded (Sep 9, 2026)";
+
+const REFRESH_MS = 2 * 60 * 1000;
+let holdings = SNAPSHOT.map(h => ({...h}));
+let hiddenSet = new Set();
+let sortKey = 'curVal';
+let sortDir = -1;
+let lastGoodFetch = null;
+let usingLive = false;
+let pubId = "2PACX-1vSYC-gajROTX1UE86rRbRwoNs-YVmWwJ3nlmkG4E9_GBX-oinph3IMsM8J0IJTwyIfo7pavko4pvQrj";
+let gid = "677934220";
+
+const fmt = n => "₹" + Number(n).toLocaleString('en-IN', {maximumFractionDigits:0});
+const fmt2 = n => Number(n).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
+const el = id => document.getElementById(id);
+
+/* ---------- Storage (settings + hidden list) ---------- */
+async function loadSettings(){
+  try{
+    const r = await window.storage.get('sheet-config', false);
+    if(r && r.value){
+      const cfg = JSON.parse(r.value);
+      if(cfg.pubId) pubId = cfg.pubId;
+      if(cfg.gid !== undefined) gid = cfg.gid;
+    }
+  }catch(e){ /* no config saved yet */ }
+  try{
+    const r = await window.storage.get('hidden-stocks', false);
+    if(r && r.value) hiddenSet = new Set(JSON.parse(r.value));
+  }catch(e){ /* none hidden yet */ }
+  el('pubIdInput').value = pubId;
+  el('gidInput').value = gid;
+}
+async function saveSettings(newPubId, newGid){
+  pubId = newPubId.trim();
+  gid = newGid.trim() || "0";
+  try{ await window.storage.set('sheet-config', JSON.stringify({pubId, gid}), false); }catch(e){}
+}
+async function saveHidden(){
+  try{ await window.storage.set('hidden-stocks', JSON.stringify([...hiddenSet]), false); }catch(e){}
+}
+
+/* ---------- CSV parsing ---------- */
+function parseCSV(text){
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for(let i=0;i<text.length;i++){
+    const c = text[i];
+    if(inQuotes){
+      if(c === '"'){
+        if(text[i+1] === '"'){ field += '"'; i++; } else { inQuotes = false; }
+      } else field += c;
+    } else {
+      if(c === '"') inQuotes = true;
+      else if(c === ','){ row.push(field); field=''; }
+      else if(c === '\n'){ row.push(field); rows.push(row); row=[]; field=''; }
+      else if(c === '\r'){ /* skip */ }
+      else field += c;
+    }
+  }
+  if(field.length || row.length){ row.push(field); rows.push(row); }
+  return rows;
+}
+
+function aggregateFromRows(rows){
+  if(!rows.length) return null;
+  const header = rows[0].map(h => h.trim());
+  const idx = name => header.indexOf(name);
+  const iName = idx('Name'), iPrice = idx('Price'), iAvg = idx('AVG Price'), iQty = idx('Stocks');
+  if(iName === -1 || iPrice === -1 || iAvg === -1 || iQty === -1) return null;
+
+  const agg = new Map();
+  for(let r=1; r<rows.length; r++){
+    const row = rows[r];
+    if(!row || !row[iName]) continue;
+    const name = row[iName].trim();
+    if(!name) continue;
+    const price = parseFloat(row[iPrice]);
+    const avg = parseFloat(row[iAvg]);
+    const qty = parseFloat(row[iQty]);
+    if(!isFinite(avg) || !isFinite(qty) || qty === 0) continue;
+    const p = isFinite(price) ? price : 0;
+    if(!agg.has(name)) agg.set(name, {qty:0, invested:0, price:p});
+    const d = agg.get(name);
+    d.qty += qty;
+    d.invested += qty*avg;
+    d.price = p;
+  }
+  const out = [];
+  for(const [name, d] of agg){
+    const avgPrice = d.invested / d.qty;
+    const curVal = d.qty * d.price;
+    const pnl = curVal - d.invested;
+    const pct = d.invested ? (pnl/d.invested*100) : 0;
+    out.push({name, qty:d.qty, avgPrice, ltp:d.price, invested:d.invested, curVal, pnl, pct});
+  }
+  return out;
+}
+
+/* ---------- Live fetch ---------- */
+// Direct browser fetches to docs.google.com are frequently blocked by CORS
+// depending on where this page is hosted/opened from. Try direct first, then
+// fall back through a couple of public CORS proxies before giving up.
+function sheetCsvUrl(){
+  return `https://docs.google.com/spreadsheets/d/e/${pubId}/pub?gid=${encodeURIComponent(gid)}&single=true&output=csv&_=${Date.now()}`;
+}
+function candidateUrls(){
+  const target = sheetCsvUrl();
+  return [
+    target,
+    `https://corsproxy.io/?url=${encodeURIComponent(target)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(target)}`
+  ];
+}
+async function fetchLive(){
+  setStatus('loading');
+  const urls = candidateUrls();
+  let lastErr = null;
+  for(const url of urls){
+    try{
+      const res = await fetch(url, {cache:'no-store'});
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      const text = await res.text();
+      if(text.trim().startsWith('<')) throw new Error('Sheet not published / wrong tab');
+      const rows = parseCSV(text);
+      const agg = aggregateFromRows(rows);
+      if(!agg || !agg.length) throw new Error('Could not find expected columns');
+      holdings = agg;
+      usingLive = true;
+      lastGoodFetch = new Date();
+      setStatus('live');
+      render();
+      return;
+    }catch(err){
+      lastErr = err;
+      // try next candidate
+    }
+  }
+  usingLive = false;
+  setStatus('error', lastErr ? lastErr.message : 'Unknown error');
+  render();
+}
+
+function setStatus(state, msg){
+  const dot = el('statusDot'), text = el('statusText');
+  dot.className = 'dot';
+  if(state === 'loading'){ text.textContent = 'Refreshing from sheet…'; }
+  else if(state === 'live'){
+    dot.classList.add('live');
+    text.textContent = 'Live — last updated ' + lastGoodFetch.toLocaleTimeString('en-IN');
+  } else if(state === 'error'){
+    dot.classList.add('error');
+    text.textContent = 'Could not reach your sheet (' + msg + ') — showing last known data. Check Sheet settings.';
+  } else {
+    dot.classList.add('stale');
+    text.textContent = 'Showing uploaded snapshot from ' + SNAPSHOT_TIME + ' — connect your live sheet in Sheet settings.';
+  }
+}
+
+/* ---------- Render ---------- */
+function render(){
+  const visible = holdings.filter(h => !hiddenSet.has(h.name));
+  const q = el('searchInput').value.trim().toLowerCase();
+  const filtered = q ? visible.filter(h => h.name.toLowerCase().includes(q)) : visible;
+
+  filtered.sort((a,b) => (a[sortKey] - b[sortKey]) * sortDir);
+
+  const totInvested = visible.reduce((s,h)=>s+h.invested,0);
+  const totCurrent = visible.reduce((s,h)=>s+h.curVal,0);
+  const totPnl = totCurrent - totInvested;
+  const totPct = totInvested ? (totPnl/totInvested*100) : 0;
+
+  el('hdrValue').textContent = fmt(totCurrent);
+  el('hdrDelta').innerHTML = `<span class="${totPnl>=0?'up':'down'}">${totPnl>=0?'▲':'▼'} ${fmt(Math.abs(totPnl))} (${totPct.toFixed(2)}%)</span>`;
+
+  el('kpiInvested').textContent = fmt(totInvested);
+  el('kpiCurrent').textContent = fmt(totCurrent);
+  el('kpiPnl').textContent = (totPnl>=0?'+':'') + fmt(totPnl);
+  el('kpiPnl').className = 'value num ' + (totPnl>=0?'up':'down');
+  el('kpiPnlPct').textContent = (totPct>=0?'+':'') + totPct.toFixed(2) + '%';
+  el('kpiCount').textContent = visible.length;
+  el('kpiUpdated').textContent = usingLive ? 'from live sheet' : 'from snapshot';
+
+  const tbody = el('tableBody');
+  tbody.innerHTML = filtered.map(h => `
+    <tr>
+      <td>${escapeHtml(h.name)}</td>
+      <td><button class="hide-btn" title="Hide ${escapeHtml(h.name)}" data-hide="${escapeHtml(h.name)}">✕</button></td>
+      <td class="num">${h.qty.toLocaleString('en-IN')}</td>
+      <td class="num">${fmt2(h.avgPrice)}</td>
+      <td class="num">${fmt2(h.ltp)}</td>
+      <td class="num">${fmt(h.invested)}</td>
+      <td class="num">${fmt(h.curVal)}</td>
+      <td class="num"><span class="pct-pill ${h.pct>=0?'up':'down'}">${h.pct>=0?'+':''}${h.pct.toFixed(2)}%</span></td>
+    </tr>
+  `).join('');
+
+  tbody.querySelectorAll('[data-hide]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      hiddenSet.add(btn.getAttribute('data-hide'));
+      await saveHidden();
+      render();
+    });
+  });
+
+  const hiddenNote = el('hiddenNote');
+  if(hiddenSet.size){
+    hiddenNote.style.display = 'block';
+    hiddenNote.innerHTML = `${hiddenSet.size} stock(s) hidden. <button id="unhideAll">Show all</button>`;
+    el('unhideAll').addEventListener('click', async () => {
+      hiddenSet.clear();
+      await saveHidden();
+      render();
+    });
+  } else {
+    hiddenNote.style.display = 'none';
+  }
+}
+
+function escapeHtml(s){ return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* ---------- Sorting ---------- */
+document.querySelectorAll('th.sortable').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.getAttribute('data-key');
+    if(sortKey === key) sortDir *= -1; else { sortKey = key; sortDir = -1; }
+    render();
+  });
+});
+el('searchInput').addEventListener('input', render);
+
+/* ---------- Settings panel ---------- */
+el('settingsBtn').addEventListener('click', () => el('settingsPanel').classList.toggle('open'));
+el('closeSettingsBtn').addEventListener('click', () => el('settingsPanel').classList.remove('open'));
+el('saveSettingsBtn').addEventListener('click', async () => {
+  await saveSettings(el('pubIdInput').value, el('gidInput').value);
+  el('settingsPanel').classList.remove('open');
+  fetchLive();
+});
+el('refreshBtn').addEventListener('click', fetchLive);
+
+/* ---------- Init ---------- */
+(async function init(){
+  await loadSettings();
+  setStatus('idle');
+  render();
+  fetchLive();
+  setInterval(fetchLive, REFRESH_MS);
+})();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
