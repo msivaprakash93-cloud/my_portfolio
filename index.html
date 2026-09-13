@@ -417,7 +417,7 @@ async function fetchXirrHistory(){
       for(const row of rows){
         if(!row || row.length < 2) continue;
         const d = parseSheetDate(row[0]);
-        const amt = parseFloat(row[1]);
+        const amt = parseFloat((row[1] || '').replace(/[,₹\s]/g, '')); // strip thousands separators / currency symbols
         // Only keep dated rows — this naturally skips a trailing "total" row with no date.
         if(d && isFinite(amt)) cashflows.push({date: d, amount: amt});
       }
@@ -499,13 +499,16 @@ function render(){
   if(xirrHistory && xirrHistory.length){
     const cashflows = [...xirrHistory, {date: new Date(), amount: totCurrent}];
     const rate = computeXirr(cashflows);
+    const totalInHistory = xirrHistory.reduce((s,cf)=>s+cf.amount,0);
+    const earliest = xirrHistory.reduce((a,b)=> a.date < b.date ? a : b);
+    const dbg = `${xirrHistory.length} flows, ${fmt(totalInHistory)} net, since ${earliest.date.toLocaleDateString('en-IN',{month:'short',year:'numeric'})}`;
     if(rate === null){
       el('kpiXirr').textContent = '—';
-      el('kpiXirrSub').textContent = 'could not compute';
+      el('kpiXirrSub').textContent = 'could not compute (' + dbg + ')';
     } else {
       el('kpiXirr').textContent = (rate>=0?'+':'') + rate.toFixed(2) + '%';
       el('kpiXirr').className = 'value num ' + (rate>=0?'up':'down');
-      el('kpiXirrSub').textContent = 'annualized, since ' + xirrHistory[0].date.toLocaleDateString('en-IN', {month:'short', year:'numeric'});
+      el('kpiXirrSub').textContent = dbg;
     }
   } else {
     el('kpiXirr').textContent = '—';
