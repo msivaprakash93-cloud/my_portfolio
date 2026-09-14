@@ -277,42 +277,44 @@ const fmt = n => "₹" + Number(n).toLocaleString('en-IN', {maximumFractionDigit
 const fmt2 = n => Number(n).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
 const el = id => document.getElementById(id);
 
-/* ---------- Storage (settings + hidden list) ---------- */
-async function loadSettings(){
+/* ---------- Storage (settings + hidden list) ----------
+   Note: this runs as a standalone site (GitHub Pages), not inside a Claude
+   artifact, so we use real browser localStorage rather than window.storage. */
+function loadSettings(){
   try{
-    const r = await window.storage.get('sheet-config', false);
-    if(r && r.value){
-      const cfg = JSON.parse(r.value);
+    const raw = localStorage.getItem('sheet-config');
+    if(raw){
+      const cfg = JSON.parse(raw);
       if(cfg.pubId) pubId = cfg.pubId;
       if(cfg.gid !== undefined) gid = cfg.gid;
       if(cfg.xirrGid !== undefined) xirrGid = cfg.xirrGid;
     }
   }catch(e){ /* no config saved yet */ }
   try{
-    const r = await window.storage.get('hidden-stocks', false);
-    if(r && r.value) hiddenSet = new Set(JSON.parse(r.value));
+    const raw = localStorage.getItem('hidden-stocks');
+    if(raw) hiddenSet = new Set(JSON.parse(raw));
   }catch(e){ /* none hidden yet */ }
   el('pubIdInput').value = pubId;
   el('gidInput').value = gid;
   el('xirrGidInput').value = xirrGid;
 }
-async function saveSettings(newPubId, newGid, newXirrGid){
+function saveSettings(newPubId, newGid, newXirrGid){
   pubId = newPubId.trim();
   gid = newGid.trim() || "0";
   xirrGid = (newXirrGid || "").trim() || xirrGid;
-  try{ await window.storage.set('sheet-config', JSON.stringify({pubId, gid, xirrGid}), false); }catch(e){}
+  try{ localStorage.setItem('sheet-config', JSON.stringify({pubId, gid, xirrGid})); }catch(e){}
 }
-async function loadGasUrl(){
+function loadGasUrl(){
   try{
-    const r = await window.storage.get('gas-url', false);
-    if(r && r.value) gasUrl = r.value;
+    const raw = localStorage.getItem('gas-url');
+    if(raw) gasUrl = raw;
   }catch(e){ /* none saved yet */ }
   el('gasUrlInput').value = gasUrl;
   el('buyDate').value = new Date().toISOString().slice(0,10);
 }
-async function saveGasUrl(newUrl){
+function saveGasUrl(newUrl){
   gasUrl = newUrl.trim();
-  try{ await window.storage.set('gas-url', gasUrl, false); }catch(e){}
+  try{ localStorage.setItem('gas-url', gasUrl); }catch(e){}
 }
 async function submitBuy(){
   const stock = el('buyStock').value.trim();
@@ -338,8 +340,8 @@ async function submitBuy(){
     statusEl.textContent = 'Network error — check the Apps Script URL and try again.';
   }
 }
-async function saveHidden(){
-  try{ await window.storage.set('hidden-stocks', JSON.stringify([...hiddenSet]), false); }catch(e){}
+function saveHidden(){
+  try{ localStorage.setItem('hidden-stocks', JSON.stringify([...hiddenSet])); }catch(e){}
 }
 
 /* ---------- CSV parsing ---------- */
