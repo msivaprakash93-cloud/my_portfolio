@@ -84,6 +84,21 @@
   .kpi .value{ font-size:21px; margin-top:8px; font-weight:600; }
   .kpi .sub{ font-size:12.5px; margin-top:4px; color:var(--muted); }
 
+  .charts-grid{
+    display:grid; grid-template-columns:repeat(auto-fit, minmax(280px,1fr)); gap:1px;
+    background: var(--line); border:1px solid var(--line); margin-bottom: 28px;
+  }
+  .chart-card{ background: var(--surface); padding: 18px 20px; }
+  .chart-card h3{ font-size:13px; font-weight:600; color:var(--text); margin-bottom:14px; }
+  .chart-body{ display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
+  .donut-wrap svg{ display:block; }
+  .legend{ flex:1; min-width:140px; display:flex; flex-direction:column; gap:7px; }
+  .legend-item{ display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--muted); }
+  .legend-item .swatch{ width:10px; height:10px; border-radius:2px; flex-shrink:0; }
+  .legend-item .lname{ color:var(--text); flex:1; }
+  .legend-item .lpct{ font-family:'IBM Plex Mono',monospace; color:var(--muted); }
+  .chart-card .hint{ font-size:12px; color:var(--faint); margin-top:12px; line-height:1.5; }
+
   /* Table */
   .ledger-head{ display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:12px; flex-wrap:wrap;}
   .ledger-head h2{ font-size:17px; font-weight:600; }
@@ -230,6 +245,24 @@
     <div class="kpi"><div class="label">HOLDINGS</div><div class="value num" id="kpiCount">—</div><div class="sub" id="kpiUpdated">—</div></div>
   </div>
 
+  <div class="charts-grid">
+    <div class="chart-card">
+      <h3>Investment % by stock</h3>
+      <div class="chart-body">
+        <div class="donut-wrap" id="stockDonut"></div>
+        <div class="legend" id="stockLegend"></div>
+      </div>
+    </div>
+    <div class="chart-card">
+      <h3>Weightage by market cap</h3>
+      <div class="chart-body">
+        <div class="donut-wrap" id="capDonut"></div>
+        <div class="legend" id="capLegend"></div>
+      </div>
+      <div class="hint" id="capHint"></div>
+    </div>
+  </div>
+
   <div class="ledger-head">
     <h2>Holdings</h2>
     <input type="text" id="searchInput" placeholder="Search a stock…">
@@ -371,6 +404,7 @@ function aggregateFromRows(rows){
   const header = rows[0].map(h => h.trim());
   const idx = name => header.indexOf(name);
   const iName = idx('Name'), iPrice = idx('Price'), iAvg = idx('AVG Price'), iQty = idx('Stocks');
+  const iCap = idx('Cap') !== -1 ? idx('Cap') : idx('Market Cap');
   if(iName === -1 || iPrice === -1 || iAvg === -1 || iQty === -1) return null;
 
   const agg = new Map();
@@ -384,11 +418,13 @@ function aggregateFromRows(rows){
     const qty = parseFloat(row[iQty]);
     if(!isFinite(avg) || !isFinite(qty) || qty === 0) continue;
     const p = isFinite(price) ? price : 0;
-    if(!agg.has(name)) agg.set(name, {qty:0, invested:0, price:p});
+    const cap = (iCap !== -1 && row[iCap]) ? row[iCap].trim() : '';
+    if(!agg.has(name)) agg.set(name, {qty:0, invested:0, price:p, cap:''});
     const d = agg.get(name);
     d.qty += qty;
     d.invested += qty*avg;
     d.price = p;
+    if(cap) d.cap = cap;
   }
   const out = [];
   for(const [name, d] of agg){
@@ -396,7 +432,7 @@ function aggregateFromRows(rows){
     const curVal = d.qty * d.price;
     const pnl = curVal - d.invested;
     const pct = d.invested ? (pnl/d.invested*100) : 0;
-    out.push({name, qty:d.qty, avgPrice, ltp:d.price, invested:d.invested, curVal, pnl, pct});
+    out.push({name, qty:d.qty, avgPrice, ltp:d.price, invested:d.invested, curVal, pnl, pct, cap: d.cap || 'Unclassified'});
   }
   return out;
 }
@@ -548,6 +584,64 @@ function setStatus(state, msg){
 }
 
 /* ---------- Render ---------- */
+const CHART_PALETTE = ['#4F9D6E','#6FB3D8','#D8A657','#C97BB5','#8B7FD1','#5FBFA0','#D87B6A','#A3C25F','#7A8FD8','#D0C25F'];
+
+function donutSVG(data, size, thickness){
+  const total = data.reduce((s,d)=>s+d.value,0) || 1;
+  const r = (size - thickness) / 2;
+  const c = size/2;
+  const circumference = 2 * Math.PI * r;
+  let offset = 0;
+  let circles = `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="var(--line)" stroke-width="${thickness}"/>`;
+  data.forEach(d => {
+    const frac = d.value / total;
+    if(frac <= 0) return;
+    const dash = frac * circumference;
+    circles += `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${d.color}" stroke-width="${thickness}"
+      stroke-dasharray="${dash} ${circumference-dash}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${c} ${c})"/>`;
+    offset += dash;
+  });
+  return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">${circles}</svg>`;
+}
+
+function renderDonutCard(svgElId, legendElId, data){
+  const total = data.reduce((s,d)=>s+d.value,0) || 1;
+  el(svgElId).innerHTML = donutSVG(data, 150, 26);
+  el(legendElId).innerHTML = data.map(d => `
+    <div class="legend-item">
+      <span class="swatch" style="background:${d.color}"></span>
+      <span class="lname">${escapeHtml(d.label)}</span>
+      <span class="lpct">${(d.value/total*100).toFixed(1)}%</span>
+    </div>`).join('');
+}
+
+function renderCharts(visible){
+  // Investment % by stock — top 8, rest grouped into "Others"
+  const byInvested = [...visible].sort((a,b)=>b.invested-a.invested);
+  const top = byInvested.slice(0,8);
+  const restSum = byInvested.slice(8).reduce((s,h)=>s+h.invested,0);
+  const stockData = top.map((h,i)=>({label:h.name, value:h.invested, color:CHART_PALETTE[i%CHART_PALETTE.length]}));
+  if(restSum > 0) stockData.push({label:'Others', value:restSum, color:'var(--faint)'});
+  renderDonutCard('stockDonut','stockLegend', stockData);
+
+  // Weightage by market cap — grouped from an optional Cap/Market Cap column
+  const capMap = new Map();
+  visible.forEach(h => {
+    const cap = h.cap || 'Unclassified';
+    capMap.set(cap, (capMap.get(cap)||0) + h.invested);
+  });
+  const capOrder = ['Large','Mid','Small','Unclassified'];
+  const capNames = [...capMap.keys()].sort((a,b)=>{
+    const ia = capOrder.indexOf(a), ib = capOrder.indexOf(b);
+    return (ia===-1?99:ia) - (ib===-1?99:ib);
+  });
+  const capData = capNames.map((name,i)=>({label:name, value:capMap.get(name), color: name==='Unclassified' ? 'var(--faint)' : CHART_PALETTE[i%CHART_PALETTE.length]}));
+  renderDonutCard('capDonut','capLegend', capData);
+  el('capHint').textContent = (capNames.length===1 && capNames[0]==='Unclassified')
+    ? 'Add a "Cap" column to your PORTFOLIO tab (Large / Mid / Small) to break this down.'
+    : '';
+}
+
 function render(){
   const visible = holdings.filter(h => !hiddenSet.has(h.name));
   const q = el('searchInput').value.trim().toLowerCase();
@@ -570,6 +664,8 @@ function render(){
   el('kpiPnlPct').textContent = (totPct>=0?'+':'') + totPct.toFixed(2) + '%';
   el('kpiCount').textContent = visible.length;
   el('kpiUpdated').textContent = usingLive ? 'from live sheet' : 'from snapshot';
+
+  renderCharts(visible);
 
   if(xirrHistory && xirrHistory.length){
     const cashflows = [...xirrHistory, {date: new Date(), amount: totCurrent}];
