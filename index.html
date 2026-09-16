@@ -170,6 +170,7 @@
     <div><span class="dot" id="statusDot"></span><span id="statusText">Loading…</span></div>
     <div class="actions">
       <button id="refreshBtn">Refresh now</button>
+      <button id="manageBtn">Manage holdings</button>
       <button id="logBuyBtn">Log buy</button>
       <button id="settingsBtn">Sheet settings</button>
     </div>
@@ -193,8 +194,8 @@
       </div>
     </div>
     <div class="hint">
-      Your sheet must be published to the web: File → Share → Publish to web → select the <strong>PORTFOLIO</strong> tab → Publish.
-      If prices don't update, your <em>gid</em> may point to the wrong tab — open the sheet, click the PORTFOLIO tab, and copy the number after <code>gid=</code> in the browser URL.
+      The <strong>HTML portfolio is the master</strong>. The PORTFOLIO tab is a synchronized copy/database and supplies the live Price values through your existing GOOGLEFINANCE formulas.
+      Publish the PORTFOLIO tab so this dashboard can read the live prices. The target portfolio tab is configured with the gid you enter below.
       <br><br>
       The <strong>XIRR cash-flow tab</strong> should have no header row: column A = a date, column B = the cash flow for that date (negative for money invested). Add a new monthly row whenever you invest, and the dashboard will fold it into XIRR automatically using your live current portfolio value as the final inflow.
     </div>
@@ -202,6 +203,32 @@
       <button id="saveSettingsBtn">Save &amp; reload</button>
       <button id="closeSettingsBtn">Close</button>
     </div>
+  </div>
+
+  <div class="settings" id="managePanel">
+    <div class="row">
+      <div class="field">
+        <label>Stock</label>
+        <input type="text" id="editStock" placeholder="e.g. CIPLA">
+      </div>
+      <div class="field">
+        <label>Qty</label>
+        <input type="number" id="editQty" placeholder="Quantity" step="0.0001">
+      </div>
+      <div class="field">
+        <label>Avg Buy</label>
+        <input type="number" id="editAvg" placeholder="Average buy price" step="0.01">
+      </div>
+    </div>
+    <div class="hint">HTML is the master portfolio. Add, update or exit a holding here; the complete HTML portfolio is then synchronized to the Google Sheet.</div>
+    <div class="btnrow">
+      <button id="addHoldingBtn">Add</button>
+      <button id="updateHoldingBtn">Update</button>
+      <button id="exitHoldingBtn">Exit</button>
+      <button id="syncMasterBtn">Sync HTML → Sheet</button>
+      <button id="closeManageBtn">Close</button>
+    </div>
+    <div class="hint" id="manageStatus">Ready.</div>
   </div>
 
   <div class="settings" id="logBuyPanel">
@@ -285,7 +312,7 @@
   </table>
   <div class="hidden-note" id="hiddenNote" style="display:none;"></div>
 
-  <footer id="footerNote">Data sourced from your Google Sheet (PORTFOLIO tab), refreshed every 2 minutes while this page is open.</footer>
+  <footer id="footerNote">HTML is the master portfolio. Google Sheet is synchronized from HTML; live prices are refreshed every 2 minutes while this page is open.</footer>
 </div>
 
 <script>
@@ -301,7 +328,7 @@ let sortDir = -1;
 let lastGoodFetch = null;
 let usingLive = false;
 let pubId = "2PACX-1vSYC-gajROTX1UE86rRbRwoNs-YVmWwJ3nlmkG4E9_GBX-oinph3IMsM8J0IJTwyIfo7pavko4pvQrj";
-let gid = "677934220";
+let gid = "994613394";
 let xirrGid = "1257294586";
 let xirrHistory = null; // [{date, amount}] loaded from the XIRR cash-flow tab
 let gasUrl = ""; // Apps Script Web App URL for logging buys
@@ -349,30 +376,114 @@ function saveGasUrl(newUrl){
   gasUrl = newUrl.trim();
   try{ localStorage.setItem('gas-url', gasUrl); }catch(e){}
 }
+async function postGas(payload){
+  if(!gasUrl) throw new Error('Apps Script Web App URL is not configured.');
+  await fetch(gasUrl, {
+    method: 'POST',
+    mode: 'no-cors',
+    headers: {'Content-Type':'text/plain;charset=utf-8'},
+    body: JSON.stringify(payload)
+  });
+}
+
+async function syncMasterToSheet(){
+  if(!gasUrl) throw new Error('Add your Apps Script Web App URL first.');
+  const payload = {
+    action: 'SYNC_PORTFOLIO',
+    holdings: holdings.map(h => ({
+      name: h.name,
+      qty: Number(h.qty),
+      avgPrice: Number(h.avgPrice),
+      cap: h.cap || ''
+    }))
+  };
+  await postGas(payload);
+  usingLive = false;
+  el('manageStatus').textContent = `Sync sent: ${payload.holdings.length} holdings → Google Sheet.`;
+}
+
 async function submitBuy(){
-  const stock = el('buyStock').value.trim();
+  const stock = el('buyStock').value.trim().toUpperCase();
   const qty = parseFloat(el('buyQty').value);
   const price = parseFloat(el('buyPrice').value);
   const date = el('buyDate').value;
   const statusEl = el('logBuyStatus');
 
+  if(!stock || !isFinite(qty) || qty <= 0 || !isFinite(price) || price <= 0 || !date){
+    statusEl.textContent = 'Fill in stock, positive qty, positive price and date.'; return;
+  }
   if(!gasUrl){ statusEl.textContent = 'Add your Apps Script URL above first, then Save URL.'; return; }
-  if(!stock || !isFinite(qty) || !isFinite(price) || !date){ statusEl.textContent = 'Fill in stock, qty, price and date.'; return; }
 
-  statusEl.textContent = 'Saving…';
+  statusEl.textContent = 'Saving buy…';
   try{
-    await fetch(gasUrl, {
-      method: 'POST',
-      mode: 'no-cors', // Apps Script doesn't return CORS headers; we fire-and-forget
-      headers: {'Content-Type': 'text/plain;charset=utf-8'},
-      body: JSON.stringify({stock, qty, price, date})
-    });
-    statusEl.textContent = `Sent: ${stock} x${qty} @ ₹${price} — refresh in a moment to see it reflected.`;
+    await postGas({action:'BUY', stock, qty, price, date});
+
+    const existing = holdings.find(h => h.name.toUpperCase() === stock);
+    if(existing){
+      const oldQty = Number(existing.qty);
+      const oldAvg = Number(existing.avgPrice);
+      const newQty = oldQty + qty;
+      existing.avgPrice = ((oldQty * oldAvg) + (qty * price)) / newQty;
+      existing.qty = newQty;
+      existing.ltp = existing.ltp || price;
+    } else {
+      holdings.push({name:stock, qty, avgPrice:price, ltp:price, cap:'Unclassified'});
+    }
+    await syncMasterToSheet();
+    render();
+    statusEl.textContent = `Saved ${stock} x${qty} @ ₹${price} and synced HTML master to Google Sheet.`;
     el('buyStock').value = ''; el('buyQty').value = ''; el('buyPrice').value = '';
   }catch(e){
-    statusEl.textContent = 'Network error — check the Apps Script URL and try again.';
+    statusEl.textContent = 'Save failed: ' + e.message;
   }
 }
+
+function findMasterStock(name){
+  return holdings.find(h => h.name.toUpperCase() === name.trim().toUpperCase());
+}
+
+async function addHolding(){
+  const name = el('editStock').value.trim().toUpperCase();
+  const qty = Number(el('editQty').value);
+  const avg = Number(el('editAvg').value);
+  if(!name || !isFinite(qty) || qty <= 0 || !isFinite(avg) || avg <= 0){
+    el('manageStatus').textContent = 'Enter stock, positive Qty and positive Avg Buy.'; return;
+  }
+  if(findMasterStock(name)){ el('manageStatus').textContent = name + ' already exists. Use Update.'; return; }
+  holdings.push({name, qty, avgPrice:avg, ltp:avg, cap:'Unclassified'});
+  try{ await syncMasterToSheet(); render(); el('manageStatus').textContent = name + ' added and synced.'; }
+  catch(e){ el('manageStatus').textContent = 'Add failed: ' + e.message; }
+}
+
+async function updateHolding(){
+  const name = el('editStock').value.trim().toUpperCase();
+  const qty = Number(el('editQty').value);
+  const avg = Number(el('editAvg').value);
+  const h = findMasterStock(name);
+  if(!h){ el('manageStatus').textContent = name + ' not found. Use Add.'; return; }
+  if(!isFinite(qty) || qty <= 0 || !isFinite(avg) || avg <= 0){
+    el('manageStatus').textContent = 'Enter positive Qty and Avg Buy.'; return;
+  }
+  h.qty = qty; h.avgPrice = avg;
+  try{ await syncMasterToSheet(); render(); el('manageStatus').textContent = name + ' updated and synced.'; }
+  catch(e){ el('manageStatus').textContent = 'Update failed: ' + e.message; }
+}
+
+async function exitHolding(){
+  const name = el('editStock').value.trim().toUpperCase();
+  const h = findMasterStock(name);
+  if(!h){ el('manageStatus').textContent = name + ' not found.'; return; }
+  if(!confirm(`Exit ${name} completely from the HTML master?`)) return;
+  holdings = holdings.filter(x => x.name.toUpperCase() !== name);
+  try{ await syncMasterToSheet(); render(); el('manageStatus').textContent = name + ' exited and synced.'; }
+  catch(e){ el('manageStatus').textContent = 'Exit failed: ' + e.message; }
+}
+
+function loadEditFields(){
+  const h = findMasterStock(el('editStock').value);
+  if(h){ el('editStock').value = h.name; el('editQty').value = h.qty; el('editAvg').value = h.avgPrice; }
+}
+
 function saveHidden(){
   try{ localStorage.setItem('hidden-stocks', JSON.stringify([...hiddenSet])); }catch(e){}
 }
@@ -466,7 +577,11 @@ async function fetchLive(){
       const rows = parseCSV(text);
       const agg = aggregateFromRows(rows);
       if(!agg || !agg.length) throw new Error('Could not find expected columns');
-      holdings = agg;
+      const liveByName = new Map(agg.map(h => [h.name.toUpperCase(), h]));
+      holdings = holdings.map(h => {
+        const live = liveByName.get(h.name.toUpperCase());
+        return live ? {...h, ltp: live.ltp, cap: live.cap || h.cap || 'Unclassified'} : h;
+      });
       usingLive = true;
       lastGoodFetch = new Date();
       setStatus('live');
@@ -573,7 +688,7 @@ function setStatus(state, msg){
   if(state === 'loading'){ text.textContent = 'Refreshing from sheet…'; }
   else if(state === 'live'){
     dot.classList.add('live');
-    text.textContent = 'Live — last updated ' + lastGoodFetch.toLocaleTimeString('en-IN');
+    text.textContent = 'HTML master + live prices — last updated ' + lastGoodFetch.toLocaleTimeString('en-IN');
   } else if(state === 'error'){
     dot.classList.add('error');
     text.textContent = 'Could not reach your sheet (' + msg + ') — showing last known data. Check Sheet settings.';
@@ -752,6 +867,16 @@ el('saveGasUrlBtn').addEventListener('click', () => {
   el('logBuyStatus').textContent = 'URL saved.';
 });
 el('submitBuyBtn').addEventListener('click', submitBuy);
+el('manageBtn').addEventListener('click', () => el('managePanel').classList.toggle('open'));
+el('closeManageBtn').addEventListener('click', () => el('managePanel').classList.remove('open'));
+el('addHoldingBtn').addEventListener('click', addHolding);
+el('updateHoldingBtn').addEventListener('click', updateHolding);
+el('exitHoldingBtn').addEventListener('click', exitHolding);
+el('syncMasterBtn').addEventListener('click', async () => {
+  try{ await syncMasterToSheet(); render(); }
+  catch(e){ el('manageStatus').textContent = 'Sync failed: ' + e.message; }
+});
+el('editStock').addEventListener('change', loadEditFields);
 
 /* ---------- Init ---------- */
 (async function init(){
@@ -759,6 +884,7 @@ el('submitBuyBtn').addEventListener('click', submitBuy);
   await loadGasUrl();
   setStatus('idle');
   render();
+  try{ await syncMasterToSheet(); }catch(e){ /* keep local HTML master if GAS is not configured */ }
   fetchAll();
   setInterval(fetchAll, REFRESH_MS);
 })();
