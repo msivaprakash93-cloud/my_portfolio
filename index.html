@@ -194,8 +194,8 @@
       </div>
     </div>
     <div class="hint">
-      The <strong>HTML portfolio is the master</strong>. The PORTFOLIO tab is a synchronized copy/database and supplies the live Price values through your existing GOOGLEFINANCE formulas.
-      Publish the PORTFOLIO tab so this dashboard can read the live prices. The target portfolio tab is configured with the gid you enter below.
+      The <strong>Google Sheet is the database/master</strong>. The dashboard reads the combined holdings directly from the selected tab and refreshes the live Price values through your existing GOOGLEFINANCE formulas.
+      Publish the portfolio/database tab so this dashboard can read it. The target portfolio tab is configured with the gid you enter below.
       <br><br>
       The <strong>XIRR cash-flow tab</strong> should have no header row: column A = a date, column B = the cash flow for that date (negative for money invested). Add a new monthly row whenever you invest, and the dashboard will fold it into XIRR automatically using your live current portfolio value as the final inflow.
     </div>
@@ -220,12 +220,12 @@
         <input type="number" id="editAvg" placeholder="Average buy price" step="0.01">
       </div>
     </div>
-    <div class="hint">HTML is the master portfolio. Add, update or exit a holding here; the complete HTML portfolio is then synchronized to the Google Sheet.</div>
+    <div class="hint">Google Sheet is the master database. Add, update or exit a holding here; the change is written to the Google Sheet, then the dashboard reloads the combined holdings from the sheet.</div>
     <div class="btnrow">
       <button id="addHoldingBtn">Add</button>
       <button id="updateHoldingBtn">Update</button>
       <button id="exitHoldingBtn">Exit</button>
-      <button id="syncMasterBtn">Sync HTML → Sheet</button>
+      <button id="reloadSheetBtn">Reload from Sheet</button>
       <button id="closeManageBtn">Close</button>
     </div>
     <div class="hint" id="manageStatus">Ready.</div>
@@ -312,7 +312,7 @@
   </table>
   <div class="hidden-note" id="hiddenNote" style="display:none;"></div>
 
-  <footer id="footerNote">HTML is the master portfolio. Google Sheet is synchronized from HTML; live prices are refreshed every 2 minutes while this page is open.</footer>
+  <footer id="footerNote">Google Sheet is the database/master; the dashboard combines duplicate stock rows and refreshes live prices every 2 minutes while this page is open.</footer>
 </div>
 
 <script>
@@ -386,22 +386,15 @@ async function postGas(payload){
   });
 }
 
-async function syncMasterToSheet(){
+async function sheetAction(payload){
   if(!gasUrl) throw new Error('Add your Apps Script Web App URL first.');
-  const payload = {
-    action: 'SYNC_PORTFOLIO',
-    holdings: holdings.map(h => ({
-      name: h.name,
-      qty: Number(h.qty),
-      avgPrice: Number(h.avgPrice),
-      cap: h.cap || ''
-    }))
-  };
   await postGas(payload);
-  usingLive = false;
-  el('manageStatus').textContent = `Sync sent: ${payload.holdings.length} holdings → Google Sheet.`;
+  // Give Apps Script a moment to commit before reading the published CSV.
+  await new Promise(resolve => setTimeout(resolve, 900));
+  await fetchAll();
 }
 
+async function submitBuy(){
 async function submitBuy(){
   const stock = el('buyStock').value.trim().toUpperCase();
   const qty = parseFloat(el('buyQty').value);
@@ -414,29 +407,16 @@ async function submitBuy(){
   }
   if(!gasUrl){ statusEl.textContent = 'Add your Apps Script URL above first, then Save URL.'; return; }
 
-  statusEl.textContent = 'Saving buy…';
+  statusEl.textContent = 'Saving buy to Google Sheet…';
   try{
-    await postGas({action:'BUY', stock, qty, price, date});
-
-    const existing = holdings.find(h => h.name.toUpperCase() === stock);
-    if(existing){
-      const oldQty = Number(existing.qty);
-      const oldAvg = Number(existing.avgPrice);
-      const newQty = oldQty + qty;
-      existing.avgPrice = ((oldQty * oldAvg) + (qty * price)) / newQty;
-      existing.qty = newQty;
-      existing.ltp = existing.ltp || price;
-    } else {
-      holdings.push({name:stock, qty, avgPrice:price, ltp:price, cap:'Unclassified'});
-    }
-    await syncMasterToSheet();
-    render();
-    statusEl.textContent = `Saved ${stock} x${qty} @ ₹${price} and synced HTML master to Google Sheet.`;
+    await sheetAction({action:'BUY', stock, qty, price, date});
+    statusEl.textContent = `Saved ${stock} x${qty} @ ₹${price} to Google Sheet.`;
     el('buyStock').value = ''; el('buyQty').value = ''; el('buyPrice').value = '';
   }catch(e){
     statusEl.textContent = 'Save failed: ' + e.message;
   }
 }
+
 
 function findMasterStock(name){
   return holdings.find(h => h.name.toUpperCase() === name.trim().toUpperCase());
@@ -450,33 +430,59 @@ async function addHolding(){
     el('manageStatus').textContent = 'Enter stock, positive Qty and positive Avg Buy.'; return;
   }
   if(findMasterStock(name)){ el('manageStatus').textContent = name + ' already exists. Use Update.'; return; }
-  holdings.push({name, qty, avgPrice:avg, ltp:avg, cap:'Unclassified'});
-  try{ await syncMasterToSheet(); render(); el('manageStatus').textContent = name + ' added and synced.'; }
-  catch(e){ el('manageStatus').textContent = 'Add failed: ' + e.message; }
+  try{
+    await sheetAction({action:'BUY', stock:name, qty, price:avg, date:new Date().toISOString().slice(0,10)});
+    el('manageStatus').textContent = name + ' added to Google Sheet.';
+  }catch(e){ el('manageStatus').textContent = 'Add failed: ' + e.message; }
 }
 
 async function updateHolding(){
   const name = el('editStock').value.trim().toUpperCase();
-  const qty = Number(el('editQty').value);
+  const newQty = Number(el('editQty').value);
   const avg = Number(el('editAvg').value);
   const h = findMasterStock(name);
   if(!h){ el('manageStatus').textContent = name + ' not found. Use Add.'; return; }
-  if(!isFinite(qty) || qty <= 0 || !isFinite(avg) || avg <= 0){
+  if(!isFinite(newQty) || newQty <= 0 || !isFinite(avg) || avg <= 0){
     el('manageStatus').textContent = 'Enter positive Qty and Avg Buy.'; return;
   }
-  h.qty = qty; h.avgPrice = avg;
-  try{ await syncMasterToSheet(); render(); el('manageStatus').textContent = name + ' updated and synced.'; }
-  catch(e){ el('manageStatus').textContent = 'Update failed: ' + e.message; }
+
+  const deltaQty = newQty - Number(h.qty);
+  if(Math.abs(deltaQty) < 1e-12){
+    el('manageStatus').textContent = name + ' quantity is already ' + newQty + '.';
+    return;
+  }
+  if(deltaQty < 0 && Math.abs(deltaQty) > Number(h.qty)){
+    el('manageStatus').textContent = 'Updated quantity cannot be negative.'; return;
+  }
+
+  try{
+    await sheetAction({
+      action:'ADJUST',
+      stock:name,
+      qty:deltaQty,
+      price:avg,
+      date:new Date().toISOString().slice(0,10)
+    });
+    el('manageStatus').textContent = name + ' updated in Google Sheet.';
+  }catch(e){ el('manageStatus').textContent = 'Update failed: ' + e.message; }
 }
 
 async function exitHolding(){
   const name = el('editStock').value.trim().toUpperCase();
   const h = findMasterStock(name);
   if(!h){ el('manageStatus').textContent = name + ' not found.'; return; }
-  if(!confirm(`Exit ${name} completely from the HTML master?`)) return;
-  holdings = holdings.filter(x => x.name.toUpperCase() !== name);
-  try{ await syncMasterToSheet(); render(); el('manageStatus').textContent = name + ' exited and synced.'; }
-  catch(e){ el('manageStatus').textContent = 'Exit failed: ' + e.message; }
+  if(!confirm(`Exit ${name} completely? This will write a negative quantity transaction to the Google Sheet database.`)) return;
+
+  try{
+    await sheetAction({
+      action:'EXIT',
+      stock:name,
+      qty:Number(h.qty),
+      price:Number(h.avgPrice),
+      date:new Date().toISOString().slice(0,10)
+    });
+    el('manageStatus').textContent = name + ' exited in Google Sheet.';
+  }catch(e){ el('manageStatus').textContent = 'Exit failed: ' + e.message; }
 }
 
 function loadEditFields(){
@@ -577,11 +583,10 @@ async function fetchLive(){
       const rows = parseCSV(text);
       const agg = aggregateFromRows(rows);
       if(!agg || !agg.length) throw new Error('Could not find expected columns');
-      const liveByName = new Map(agg.map(h => [h.name.toUpperCase(), h]));
-      holdings = holdings.map(h => {
-        const live = liveByName.get(h.name.toUpperCase());
-        return live ? {...h, ltp: live.ltp, cap: live.cap || h.cap || 'Unclassified'} : h;
-      });
+      // The Google Sheet is authoritative.  Use the aggregated result itself.
+      // This fixes duplicate rows such as ITC being displayed as 1068 when
+      // the Sheet contains multiple ITC rows totaling 1087.
+      holdings = agg.map(h => ({...h, cap: h.cap || 'Unclassified'}));
       usingLive = true;
       lastGoodFetch = new Date();
       setStatus('live');
@@ -688,7 +693,7 @@ function setStatus(state, msg){
   if(state === 'loading'){ text.textContent = 'Refreshing from sheet…'; }
   else if(state === 'live'){
     dot.classList.add('live');
-    text.textContent = 'HTML master + live prices — last updated ' + lastGoodFetch.toLocaleTimeString('en-IN');
+    text.textContent = 'Google Sheet database + combined live prices — last updated ' + lastGoodFetch.toLocaleTimeString('en-IN');
   } else if(state === 'error'){
     dot.classList.add('error');
     text.textContent = 'Could not reach your sheet (' + msg + ') — showing last known data. Check Sheet settings.';
@@ -745,7 +750,7 @@ function renderCharts(visible){
     const cap = h.cap || 'Unclassified';
     capMap.set(cap, (capMap.get(cap)||0) + h.invested);
   });
-  const capOrder = ['Large','Mid','Small','Unclassified'];
+  const capOrder = ['Large','Large Mid','Mid','Small','Micro','Unclassified'];
   const capNames = [...capMap.keys()].sort((a,b)=>{
     const ia = capOrder.indexOf(a), ib = capOrder.indexOf(b);
     return (ia===-1?99:ia) - (ib===-1?99:ib);
@@ -753,7 +758,7 @@ function renderCharts(visible){
   const capData = capNames.map((name,i)=>({label:name, value:capMap.get(name), color: name==='Unclassified' ? 'var(--faint)' : CHART_PALETTE[i%CHART_PALETTE.length]}));
   renderDonutCard('capDonut','capLegend', capData);
   el('capHint').textContent = (capNames.length===1 && capNames[0]==='Unclassified')
-    ? 'Add a "Cap" column to your PORTFOLIO tab (Large / Mid / Small) to break this down.'
+    ? 'Add a "Cap" column to your portfolio/database tab (Large / Large Mid / Mid / Small / Micro) to break this down.'
     : '';
 }
 
@@ -872,9 +877,9 @@ el('closeManageBtn').addEventListener('click', () => el('managePanel').classList
 el('addHoldingBtn').addEventListener('click', addHolding);
 el('updateHoldingBtn').addEventListener('click', updateHolding);
 el('exitHoldingBtn').addEventListener('click', exitHolding);
-el('syncMasterBtn').addEventListener('click', async () => {
-  try{ await syncMasterToSheet(); render(); }
-  catch(e){ el('manageStatus').textContent = 'Sync failed: ' + e.message; }
+el('reloadSheetBtn').addEventListener('click', async () => {
+  try{ await fetchAll(); el('manageStatus').textContent = 'Reloaded combined holdings from Google Sheet.'; }
+  catch(e){ el('manageStatus').textContent = 'Reload failed: ' + e.message; }
 });
 el('editStock').addEventListener('change', loadEditFields);
 
@@ -884,7 +889,6 @@ el('editStock').addEventListener('change', loadEditFields);
   await loadGasUrl();
   setStatus('idle');
   render();
-  try{ await syncMasterToSheet(); }catch(e){ /* keep local HTML master if GAS is not configured */ }
   fetchAll();
   setInterval(fetchAll, REFRESH_MS);
 })();
