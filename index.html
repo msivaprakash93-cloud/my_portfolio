@@ -138,6 +138,15 @@
   .badge-new{ background:#1C3B28; color:#7AE29E; border:1px solid #2C5E40; }
   .badge-updated{ background:#1E3247; color:#8AD2FF; border:1px solid #2B4E73; }
 
+  .cap-badge{
+    font-family:'IBM Plex Mono', monospace; font-size:10.5px; font-weight:500;
+    padding:2px 7px; border-radius:3px; white-space:nowrap; display:inline-block;
+  }
+  .cap-large{ background:#182838; color:#8AD2FF; border:1px solid #2B4E73; }
+  .cap-mid{ background:#332A15; color:#F3D77B; border:1px solid #4D3F1E; }
+  .cap-small{ background:#163022; color:#7AE29E; border:1px solid #255238; }
+  .cap-micro{ background:#2D1B36; color:#D896FF; border:1px solid #472B55; }
+
   .hidden-note{ font-size:12.5px; color:var(--muted); margin-top:14px; }
   .hidden-note button{ padding:3px 8px; margin-left:6px;}
 
@@ -191,6 +200,8 @@
   <div class="statusbar">
     <div><span class="dot" id="statusDot"></span><span id="statusText">Loading…</span></div>
     <div class="actions">
+      <button id="syncTabBtn" style="background:#234E31;color:#A7E3B8;border-color:#2e6841;">Sync Tab 2078289519</button>
+      <button id="scriptBtn" style="color:var(--gold);">Sheet script</button>
       <button id="refreshBtn">Refresh now</button>
       <button id="manageBtn">Manage holdings</button>
       <button id="logBuyBtn">Log buy</button>
@@ -215,16 +226,40 @@
         <input type="text" id="newEntryGidInput" placeholder="994613394">
       </div>
       <div class="field">
+        <label>Dashboard Stock List Tab (gid)</label>
+        <input type="text" id="dashboardGidInput" placeholder="2078289519">
+      </div>
+      <div class="field">
         <label>XIRR cash-flow tab (gid)</label>
         <input type="text" id="xirrGidInput" placeholder="1257294586">
       </div>
     </div>
     <div class="hint">
-      <strong>Multi-tab synchronization:</strong> The dashboard automatically fetches the Base Portfolio tab (master holdings) and folds in all new buys and adjustments from the New Entry tab (<code>gid=994613394</code>). New stocks (e.g. LALITHAA) and updated holdings (e.g. WIPRO) are recalculated with live price updates and weighted average buy prices.
+      <strong>Multi-tab synchronization &amp; Auto-Sync:</strong> The dashboard automatically fetches the Base Portfolio tab, folds in transactions from the New Entry tab (<code>gid=994613394</code>), and keeps tab <code>gid=2078289519</code> synchronized with the full consolidated stock list.
     </div>
     <div class="btnrow">
       <button id="saveSettingsBtn">Save &amp; reload</button>
       <button id="closeSettingsBtn">Close</button>
+    </div>
+  </div>
+
+  <div class="settings" id="scriptPanel">
+    <div class="row">
+      <div class="field">
+        <label>Google Apps Script Web App URL</label>
+        <input type="text" id="scriptGasUrlInput" placeholder="https://script.google.com/macros/s/…/exec">
+      </div>
+    </div>
+    <div class="btnrow"><button id="saveScriptGasUrlBtn">Save Apps Script URL</button></div>
+    <div class="hint" style="margin-top:10px;">
+      <strong>Auto-Update Tab gid=2078289519 ("dashboard"):</strong><br>
+      1. In your Google Sheet, open <strong>Extensions &gt; Apps Script</strong>.<br>
+      2. Paste the provided sync script and click <strong>Deploy &gt; New deployment &gt; Web app</strong> (Access: <em>Anyone</em>).<br>
+      3. Paste the web app URL above. Every time you refresh or log buys, the stock list in tab <code>gid=2078289519</code> updates automatically with live formulas, prices, and totals!
+    </div>
+    <div class="btnrow" style="margin-top:10px;">
+      <button id="manualSyncBtn" style="background:#234E31;color:#A7E3B8;border-color:#2e6841;">Push Stock List to Tab 2078289519 Now</button>
+      <button id="closeScriptBtn">Close</button>
     </div>
   </div>
 
@@ -321,8 +356,9 @@
   <table>
     <thead>
       <tr>
-        <th>Stock</th>
+        <th class="sortable" data-key="name" style="text-align:left;">Stock</th>
         <th></th>
+        <th class="sortable" data-key="cap" style="text-align:left;">Cap</th>
         <th class="sortable" data-key="qty">Qty</th>
         <th class="sortable" data-key="avgPrice">Avg Buy</th>
         <th class="sortable" data-key="ltp">LTP</th>
@@ -348,10 +384,11 @@ let sortDir = -1;
 let lastGoodFetch = null;
 let usingLive = false;
 
-// Default configuration with both tabs supported
+// Default configuration with tabs supported
 let pubId = "2PACX-1vSYC-gajROTX1UE86rRbRwoNs-YVmWwJ3nlmkG4E9_GBX-oinph3IMsM8J0IJTwyIfo7pavko4pvQrj";
 let primaryGid = "677934220";
 let newEntryGid = "994613394";
+let dashboardGid = "2078289519";
 let xirrGid = "1257294586";
 let xirrHistory = null;
 let gasUrl = "";
@@ -370,6 +407,7 @@ function loadSettings(){
       if(cfg.primaryGid) primaryGid = cfg.primaryGid;
       else if(cfg.gid && cfg.gid !== '994613394' && cfg.gid !== '0') primaryGid = cfg.gid;
       if(cfg.newEntryGid) newEntryGid = cfg.newEntryGid;
+      if(cfg.dashboardGid) dashboardGid = cfg.dashboardGid;
       if(cfg.xirrGid !== undefined) xirrGid = cfg.xirrGid;
     }
   }catch(e){}
@@ -380,16 +418,18 @@ function loadSettings(){
   el('pubIdInput').value = pubId;
   el('primaryGidInput').value = primaryGid;
   el('newEntryGidInput').value = newEntryGid;
+  el('dashboardGidInput').value = dashboardGid;
   el('xirrGidInput').value = xirrGid;
 }
 
-function saveSettings(newPubId, newPrimary, newNewEntry, newXirrGid){
+function saveSettings(newPubId, newPrimary, newNewEntry, newDashboard, newXirrGid){
   pubId = newPubId.trim();
   primaryGid = (newPrimary || "677934220").trim();
   newEntryGid = (newNewEntry || "994613394").trim();
+  dashboardGid = (newDashboard || "2078289519").trim();
   xirrGid = (newXirrGid || "1257294586").trim();
   try{
-    localStorage.setItem('sheet-config', JSON.stringify({pubId, primaryGid, newEntryGid, xirrGid, gid: primaryGid}));
+    localStorage.setItem('sheet-config', JSON.stringify({pubId, primaryGid, newEntryGid, dashboardGid, xirrGid, gid: primaryGid}));
   }catch(e){}
 }
 
@@ -399,12 +439,15 @@ function loadGasUrl(){
     if(raw) gasUrl = raw;
   }catch(e){}
   el('gasUrlInput').value = gasUrl;
+  if(el('scriptGasUrlInput')) el('scriptGasUrlInput').value = gasUrl;
   el('buyDate').value = new Date().toISOString().slice(0,10);
 }
 
 function saveGasUrl(newUrl){
   gasUrl = newUrl.trim();
   try{ localStorage.setItem('gas-url', gasUrl); }catch(e){}
+  el('gasUrlInput').value = gasUrl;
+  if(el('scriptGasUrlInput')) el('scriptGasUrlInput').value = gasUrl;
 }
 
 async function postGas(payload){
@@ -459,6 +502,223 @@ function cleanName(str){
   return (str || '').replace(/[\r\n\t]/g, '').trim().toUpperCase();
 }
 
+const KNOWN_STOCK_CAPS = {
+  // Nifty 50 & Top Large Cap
+  RELIANCE: 'Large Cap',
+  TCS: 'Large Cap',
+  HDFCBANK: 'Large Cap',
+  HDFC: 'Large Cap',
+  BHARTIARTL: 'Large Cap',
+  ICICIBANK: 'Large Cap',
+  INFY: 'Large Cap',
+  INFOSYS: 'Large Cap',
+  SBIN: 'Large Cap',
+  ITC: 'Large Cap',
+  LT: 'Large Cap',
+  HCLTECH: 'Large Cap',
+  'HCL TECH': 'Large Cap',
+  BAJFINANCE: 'Large Cap',
+  BAJAJFINANCE: 'Large Cap',
+  MARUTI: 'Large Cap',
+  TATAMOTORS: 'Large Cap',
+  SUNPHARMA: 'Large Cap',
+  KOTAKBANK: 'Large Cap',
+  TITAN: 'Large Cap',
+  AXISBANK: 'Large Cap',
+  NTPC: 'Large Cap',
+  ONGC: 'Large Cap',
+  POWERGRID: 'Large Cap',
+  ADANIENT: 'Large Cap',
+  ADANIPORTS: 'Large Cap',
+  COALINDIA: 'Large Cap',
+  BAJAJ_AUTO: 'Large Cap',
+  'BAJAJ AUTO': 'Large Cap',
+  BAJAJAUTO: 'Large Cap',
+  TATASTEEL: 'Large Cap',
+  ASIANPAINT: 'Large Cap',
+  ULTRACEMCO: 'Large Cap',
+  WIPRO: 'Large Cap',
+  M_M: 'Large Cap',
+  'M&M': 'Large Cap',
+  MM: 'Large Cap',
+  JSWSTEEL: 'Large Cap',
+  INDUSINDBK: 'Large Cap',
+  DRREDDY: 'Large Cap',
+  'DR REDDY': 'Large Cap',
+  CIPLA: 'Large Cap',
+  GRASIM: 'Large Cap',
+  TECHM: 'Large Cap',
+  HINDALCO: 'Large Cap',
+  NESTLEIND: 'Large Cap',
+  HERO: 'Large Cap',
+  HEROMOTOCO: 'Large Cap',
+  BPCL: 'Large Cap',
+  EICHERMOT: 'Large Cap',
+  BRITANNIA: 'Large Cap',
+  APOLLOHOSP: 'Large Cap',
+  DIVISLAB: 'Large Cap',
+  SBILIFE: 'Large Cap',
+  HDFCLIFE: 'Large Cap',
+  TMPV: 'Large Cap',
+  TMCV: 'Large Cap',
+  MUTHOOTFIN: 'Large Cap',
+  ZYDUS: 'Large Cap',
+  ZYDUSLIFE: 'Large Cap',
+  BEL: 'Large Cap',
+  HAL: 'Large Cap',
+  SIEMENS: 'Large Cap',
+  VBL: 'Large Cap',
+  TRENT: 'Large Cap',
+  ZOMATO: 'Large Cap',
+  JIOFIN: 'Large Cap',
+  CHOLAFIN: 'Large Cap',
+  TVSMOTOR: 'Large Cap',
+  BOSCHLTD: 'Large Cap',
+  HAVELLS: 'Large Cap',
+  PIDILITIND: 'Large Cap',
+  DLF: 'Large Cap',
+  GAIL: 'Large Cap',
+  IOC: 'Large Cap',
+  VEDL: 'Large Cap',
+  AMBUJACEM: 'Large Cap',
+  SHREECEM: 'Large Cap',
+  BANKBARODA: 'Large Cap',
+  PNB: 'Large Cap',
+  CANBK: 'Large Cap',
+  UNIONBANK: 'Large Cap',
+  IOB: 'Large Cap',
+  INDIGO: 'Large Cap',
+  SRF: 'Large Cap',
+  MOTHERSON: 'Large Cap',
+
+  // Mid Cap
+  PETRONET: 'Mid Cap',
+  AMARAJ: 'Mid Cap',
+  'AMARA RAJA': 'Mid Cap',
+  AMARAJA: 'Mid Cap',
+  AREM: 'Mid Cap',
+  KALYANKJIL: 'Mid Cap',
+  IDFC: 'Mid Cap',
+  IDFCFIRSTB: 'Mid Cap',
+  NATCOPHARM: 'Mid Cap',
+  TEJASNET: 'Mid Cap',
+  MANAPPURAM: 'Mid Cap',
+  FINCABLES: 'Mid Cap',
+  JYOTHYLAB: 'Mid Cap',
+  PGINVIT: 'Mid Cap',
+  HDBFS: 'Mid Cap',
+  FEDERALBNK: 'Mid Cap',
+  VOLTAS: 'Mid Cap',
+  ASHOKLEY: 'Mid Cap',
+  POLYCAB: 'Mid Cap',
+  AUROPHARMA: 'Mid Cap',
+  CUMMINSIND: 'Mid Cap',
+  JUBLFOOD: 'Mid Cap',
+  MPHASIS: 'Mid Cap',
+  OFSS: 'Mid Cap',
+  PERSISTENT: 'Mid Cap',
+  COFORGE: 'Mid Cap',
+  ESCORTS: 'Mid Cap',
+  ASTRAL: 'Mid Cap',
+  PAGEIND: 'Mid Cap',
+  MAXHEALTH: 'Mid Cap',
+  SUNDARMFIN: 'Mid Cap',
+  ABCAPITAL: 'Mid Cap',
+  AUBANK: 'Mid Cap',
+  BANDHANBNK: 'Mid Cap',
+  DEEPAKNTR: 'Mid Cap',
+  TATACOMM: 'Mid Cap',
+  LUPIN: 'Mid Cap',
+  ALKEM: 'Mid Cap',
+  TORNTPOWER: 'Mid Cap',
+  GMRINFRA: 'Mid Cap',
+  PRESTIGE: 'Mid Cap',
+  OBEROIRLTY: 'Mid Cap',
+  PHOENIXLTD: 'Mid Cap',
+  BHARATFORG: 'Mid Cap',
+  APLAPOLLO: 'Mid Cap',
+  DIXON: 'Mid Cap',
+  KAYNES: 'Mid Cap',
+  TATAELXSI: 'Mid Cap',
+  LTTS: 'Mid Cap',
+  KPITTECH: 'Mid Cap',
+  LTIM: 'Large Cap',
+
+  // Small Cap & Micro Cap
+  TMB: 'Small Cap',
+  KTKBANK: 'Small Cap',
+  SOUTHBANK: 'Small Cap',
+  MHRIL: 'Small Cap',
+  SHARDACROP: 'Small Cap',
+  PRICOLLTD: 'Small Cap',
+  GLOBUSSPR: 'Small Cap',
+  SPANDANA: 'Small Cap',
+  MVGJL: 'Small Cap',
+  LALITHAA: 'Small Cap',
+  CDSL: 'Small Cap',
+  CAMS: 'Small Cap',
+  ROUTE: 'Small Cap',
+  HAPPSTMNDS: 'Small Cap',
+  TANLA: 'Small Cap',
+  EQUITASBNK: 'Small Cap',
+  UJJIVANSFB: 'Small Cap',
+  RBLBANK: 'Small Cap',
+  KNRCON: 'Small Cap',
+  NCC: 'Small Cap',
+  PNCINFRA: 'Small Cap',
+  SONACOMS: 'Small Cap',
+  CEATLTD: 'Small Cap',
+  JKTYRE: 'Small Cap',
+  APOLLOTYRE: 'Mid Cap',
+  MRF: 'Mid Cap',
+  RADICO: 'Small Cap',
+  CENTURYPLY: 'Small Cap',
+  GREENPANEL: 'Small Cap',
+  KAJARIACER: 'Small Cap',
+  VIPIND: 'Small Cap',
+  BATAINDIA: 'Mid Cap',
+};
+
+function normalizeCap(rawCap){
+  if(!rawCap) return '';
+  const s = rawCap.trim().toLowerCase();
+  if(s.includes('large mid') || s.includes('large-mid')) return 'Large & Mid Cap';
+  if(s.includes('large')) return 'Large Cap';
+  if(s.includes('mid')) return 'Mid Cap';
+  if(s.includes('small')) return 'Small Cap';
+  if(s.includes('micro')) return 'Micro Cap';
+  if(s.includes('unclassified')) return '';
+  return rawCap.trim();
+}
+
+function resolveMarketCap(stockName, explicitCap){
+  const normalizedExplicit = normalizeCap(explicitCap);
+  if(normalizedExplicit) return normalizedExplicit;
+
+  try {
+    const rawOverrides = localStorage.getItem('user-stock-caps');
+    if(rawOverrides){
+      const overrides = JSON.parse(rawOverrides);
+      const clean = cleanName(stockName);
+      if(overrides[clean]) return overrides[clean];
+    }
+  } catch(e){}
+
+  const clean = cleanName(stockName);
+  if(KNOWN_STOCK_CAPS[clean]) return KNOWN_STOCK_CAPS[clean];
+
+  const stripped = clean.replace(/[^A-Z0-9]/g, '');
+  if(KNOWN_STOCK_CAPS[stripped]) return KNOWN_STOCK_CAPS[stripped];
+
+  for(const [k, v] of Object.entries(KNOWN_STOCK_CAPS)){
+    if(clean === k || clean.startsWith(k + ' ') || clean.endsWith(' ' + k)){
+      return v;
+    }
+  }
+
+  return 'Mid Cap';
+}
+
 function loadPriceCache(){
   try{
     const raw = localStorage.getItem('last-good-prices');
@@ -469,21 +729,26 @@ function savePriceCache(cache){
   try{ localStorage.setItem('last-good-prices', JSON.stringify(cache)); }catch(e){}
 }
 
-function aggregateFromRows(primaryRows, newEntryRows){
+function aggregateFromRows(primaryRows, newEntryRows, dashboardRows){
   const priceCache = loadPriceCache();
   const stale = [];
   const map = new Map();
 
-  // 1. Ingest base holdings
-  if(primaryRows && primaryRows.length > 0){
-    const header = primaryRows[0].map(h => h.trim());
+  // 1. Ingest base holdings (from master portfolio or dashboard base if available)
+  const baseRows = (dashboardRows && dashboardRows.length > 1) ? dashboardRows : primaryRows;
+
+  if(baseRows && baseRows.length > 0){
+    const header = baseRows[0].map(h => h.trim());
     const idx = name => header.indexOf(name);
-    const iName = idx('Name'), iPrice = idx('Price'), iAvg = idx('AVG Price'), iQty = idx('Stocks');
+    const iName = idx('Name') !== -1 ? idx('Name') : idx('Stock');
+    const iPrice = idx('Price') !== -1 ? idx('Price') : idx('Price (LTP)');
+    const iAvg = idx('AVG Price') !== -1 ? idx('AVG Price') : idx('Avg Price');
+    const iQty = idx('Stocks') !== -1 ? idx('Stocks') : (idx('Stocks (Qty)') !== -1 ? idx('Stocks (Qty)') : idx('Qty'));
     const iCap = idx('Cap') !== -1 ? idx('Cap') : idx('Market Cap');
 
     if(iName !== -1 && iQty !== -1){
-      for(let r=1; r<primaryRows.length; r++){
-        const row = primaryRows[r];
+      for(let r=1; r<baseRows.length; r++){
+        const row = baseRows[r];
         if(!row || !row[iName]) continue;
         const name = cleanName(row[iName]);
         if(!name || name === 'TOTAL' || name === 'INVESTED') continue;
@@ -505,10 +770,11 @@ function aggregateFromRows(primaryRows, newEntryRows){
           if(!stale.includes(name)) stale.push(name);
         }
 
-        const cap = (iCap !== -1 && row[iCap]) ? row[iCap].trim() : '';
+        const rawCap = (iCap !== -1 && row[iCap]) ? row[iCap].trim() : '';
+        const cap = resolveMarketCap(name, rawCap);
 
         if(!map.has(name)){
-          map.set(name, {name, qty:0, invested:0, price:p, cap:'', isNew:false, isUpdated:false, baseQty:0});
+          map.set(name, {name, qty:0, invested:0, price:p, cap, isNew:false, isUpdated:false, baseQty:0});
         }
         const d = map.get(name);
         d.qty += qty;
@@ -520,11 +786,45 @@ function aggregateFromRows(primaryRows, newEntryRows){
     }
   }
 
+  // Also fold in primaryRows if dashboardRows was used as base to ensure no master stocks are missed
+  if(dashboardRows && dashboardRows.length > 1 && primaryRows && primaryRows.length > 0){
+    const header = primaryRows[0].map(h => h.trim());
+    const idx = name => header.indexOf(name);
+    const iName = idx('Name') !== -1 ? idx('Name') : idx('Stock');
+    const iPrice = idx('Price') !== -1 ? idx('Price') : idx('Price (LTP)');
+    const iAvg = idx('AVG Price') !== -1 ? idx('AVG Price') : idx('Avg Price');
+    const iQty = idx('Stocks') !== -1 ? idx('Stocks') : (idx('Stocks (Qty)') !== -1 ? idx('Stocks (Qty)') : idx('Qty'));
+    const iCap = idx('Cap') !== -1 ? idx('Cap') : idx('Market Cap');
+
+    if(iName !== -1 && iQty !== -1){
+      for(let r=1; r<primaryRows.length; r++){
+        const row = primaryRows[r];
+        if(!row || !row[iName]) continue;
+        const name = cleanName(row[iName]);
+        if(!name || name === 'TOTAL' || name === 'INVESTED' || map.has(name)) continue;
+
+        const qty = parseFloat((row[iQty] || '').replace(/,/g, ''));
+        const avg = parseFloat((row[iAvg] || '').replace(/,/g, ''));
+        if(!isFinite(qty) || qty === 0 || !isFinite(avg) || avg <= 0) continue;
+
+        const price = parseFloat((row[iPrice] || '').replace(/,/g, ''));
+        const p = isFinite(price) && price > 0 ? price : avg;
+        const rawCap = (iCap !== -1 && row[iCap]) ? row[iCap].trim() : '';
+        const cap = resolveMarketCap(name, rawCap);
+
+        map.set(name, {name, qty, invested: qty * avg, price: p, cap, isNew: false, isUpdated: false, baseQty: qty});
+      }
+    }
+  }
+
   // 2. Ingest new entry transactions (gid=994613394)
   if(newEntryRows && newEntryRows.length > 0){
     const header = newEntryRows[0].map(h => h.trim());
     const idx = name => header.indexOf(name);
-    const iName = idx('Name'), iPrice = idx('Price'), iAvg = idx('AVG Price'), iQty = idx('Stocks');
+    const iName = idx('Name') !== -1 ? idx('Name') : idx('Stock');
+    const iPrice = idx('Price') !== -1 ? idx('Price') : idx('Price (LTP)');
+    const iAvg = idx('AVG Price') !== -1 ? idx('AVG Price') : idx('Avg Price');
+    const iQty = idx('Stocks') !== -1 ? idx('Stocks') : (idx('Stocks (Qty)') !== -1 ? idx('Stocks (Qty)') : idx('Qty'));
     const iCap = idx('Cap') !== -1 ? idx('Cap') : idx('Market Cap');
     const iAction = idx('Action');
 
@@ -541,13 +841,14 @@ function aggregateFromRows(primaryRows, newEntryRows){
         const avg = iAvg !== -1 ? parseFloat((row[iAvg] || '').replace(/,/g, '')) : NaN;
         const price = iPrice !== -1 ? parseFloat((row[iPrice] || '').replace(/,/g, '')) : NaN;
         const action = iAction !== -1 && row[iAction] ? row[iAction].trim().toUpperCase() : 'BUY';
-        const cap = (iCap !== -1 && row[iCap]) ? row[iCap].trim() : '';
+        const rawCap = (iCap !== -1 && row[iCap]) ? row[iCap].trim() : '';
+        const cap = resolveMarketCap(name, rawCap);
 
         const isKnown = map.has(name);
         if(!isKnown){
           let p = isFinite(price) && price > 0 ? price : (isFinite(avg) && avg > 0 ? avg : 0);
           if(p > 0) priceCache[name] = p;
-          map.set(name, {name, qty:0, invested:0, price:p, cap:cap||'Unclassified', isNew:true, isUpdated:false, baseQty:0});
+          map.set(name, {name, qty:0, invested:0, price:p, cap, isNew:true, isUpdated:false, baseQty:0});
         } else {
           map.get(name).isUpdated = true;
         }
@@ -593,7 +894,7 @@ function aggregateFromRows(primaryRows, newEntryRows){
     const pct = d.invested ? (pnl / d.invested * 100) : 0;
     out.push({
       name, qty: d.qty, avgPrice, ltp: d.price, invested: d.invested,
-      curVal, pnl, pct, cap: d.cap || 'Unclassified',
+      curVal, pnl, pct, cap: resolveMarketCap(name, d.cap),
       priceStale: stale.includes(name),
       isNew: d.isNew, isUpdated: d.isUpdated, baseQty: d.baseQty
     });
@@ -622,19 +923,35 @@ async function fetchTabCsv(targetGid){
   return null;
 }
 
+async function syncDashboardToSheet(stocksToSync){
+  if(!gasUrl || !stocksToSync || !stocksToSync.length) return;
+  try {
+    await postGas({
+      action: 'SYNC_DASHBOARD',
+      gid: dashboardGid,
+      sheetName: 'dashboard',
+      holdings: stocksToSync
+    });
+    console.log(`Pushed ${stocksToSync.length} stocks to tab gid=${dashboardGid}`);
+  } catch(e) {
+    console.warn('Dashboard sync note:', e.message);
+  }
+}
+
 async function fetchLive(){
   setStatus('loading');
   try{
-    const [primaryRows, newEntryRows] = await Promise.all([
+    const [primaryRows, newEntryRows, dashboardRows] = await Promise.all([
       fetchTabCsv(primaryGid),
-      fetchTabCsv(newEntryGid)
+      fetchTabCsv(newEntryGid),
+      fetchTabCsv(dashboardGid)
     ]);
 
-    if(!primaryRows && !newEntryRows){
+    if(!primaryRows && !newEntryRows && !dashboardRows){
       throw new Error('Unable to connect to published sheets');
     }
 
-    const agg = aggregateFromRows(primaryRows || [], newEntryRows || []);
+    const agg = aggregateFromRows(primaryRows || [], newEntryRows || [], dashboardRows || []);
     if(!agg || !agg.length) throw new Error('Could not parse holdings data');
 
     holdings = agg;
@@ -642,13 +959,18 @@ async function fetchLive(){
     lastGoodFetch = new Date();
     setStatus('live');
 
+    // Auto-sync to dashboard tab gid=2078289519 every time
+    if(gasUrl && holdings.length > 0){
+      syncDashboardToSheet(holdings);
+    }
+
     // Update banner for user awareness
     const newCount = holdings.filter(h => h.isNew).length;
     const updatedCount = holdings.filter(h => h.isUpdated).length;
     const banner = el('syncBanner');
     if(newCount > 0 || updatedCount > 0){
       banner.style.display = 'flex';
-      el('syncBannerText').textContent = `Merged Base Tab (gid=${primaryGid}) + New Entries Tab (gid=${newEntryGid}): reflected ${newCount} new stock(s) and ${updatedCount} updated stock(s).`;
+      el('syncBannerText').textContent = `Merged Base (gid=${primaryGid}), New Entries (gid=${newEntryGid}) & Dashboard Tab (gid=${dashboardGid}): reflected ${newCount} new stock(s), ${updatedCount} updated.`;
       el('newStocksCount').textContent = `${holdings.length} total active holdings`;
     } else {
       banner.style.display = 'none';
@@ -779,27 +1101,46 @@ function renderCharts(visible){
   renderDonutCard('stockDonut','stockLegend', stockData);
 
   const capMap = new Map();
+  const capCountMap = new Map();
   visible.forEach(h => {
-    const cap = h.cap || 'Unclassified';
+    const cap = h.cap || 'Mid Cap';
     capMap.set(cap, (capMap.get(cap)||0) + h.invested);
+    capCountMap.set(cap, (capCountMap.get(cap)||0) + 1);
   });
-  const capOrder = ['Large','Large Mid','Mid','Small','Micro','Unclassified'];
+  const capOrder = ['Large Cap','Large','Large & Mid Cap','Mid Cap','Mid','Small Cap','Small','Micro Cap','Micro','Unclassified'];
   const capNames = [...capMap.keys()].sort((a,b)=>{
-    const ia = capOrder.indexOf(a), ib = capOrder.indexOf(b);
+    const ia = capOrder.findIndex(o => a.toLowerCase().includes(o.toLowerCase()));
+    const ib = capOrder.findIndex(o => b.toLowerCase().includes(o.toLowerCase()));
     return (ia===-1?99:ia) - (ib===-1?99:ib);
   });
-  const capData = capNames.map((name,i)=>({label:name, value:capMap.get(name), color: name==='Unclassified' ? 'var(--faint)' : CHART_PALETTE[i%CHART_PALETTE.length]}));
+  const getCapColor = (name) => {
+    const l = name.toLowerCase();
+    if(l.includes('large')) return '#3B82F6';
+    if(l.includes('mid')) return '#E5C368';
+    if(l.includes('small')) return '#10B981';
+    if(l.includes('micro')) return '#A855F7';
+    return '#8B968E';
+  };
+  const capData = capNames.map((name)=>({
+    label: `${name} (${capCountMap.get(name) || 0})`,
+    value: capMap.get(name),
+    color: getCapColor(name)
+  }));
   renderDonutCard('capDonut','capLegend', capData);
-  el('capHint').textContent = (capNames.length===1 && capNames[0]==='Unclassified')
-    ? 'Add a "Cap" column to your portfolio tab to categorize.' : '';
+  el('capHint').textContent = `${visible.length} stocks categorized by market cap.`;
 }
 
 function render(){
   const visible = holdings.filter(h => !hiddenSet.has(h.name));
   const q = el('searchInput').value.trim().toLowerCase();
-  const filtered = q ? visible.filter(h => h.name.toLowerCase().includes(q)) : visible;
+  const filtered = q ? visible.filter(h => h.name.toLowerCase().includes(q) || (h.cap && h.cap.toLowerCase().includes(q))) : visible;
 
-  filtered.sort((a,b) => (a[sortKey] - b[sortKey]) * sortDir);
+  filtered.sort((a,b) => {
+    if(sortKey === 'name' || sortKey === 'cap'){
+      return (String(a[sortKey] || '')).localeCompare(String(b[sortKey] || '')) * sortDir;
+    }
+    return ((a[sortKey] || 0) - (b[sortKey] || 0)) * sortDir;
+  });
 
   const totInvested = visible.reduce((s,h)=>s+h.invested,0);
   const totCurrent = visible.reduce((s,h)=>s+h.curVal,0);
@@ -839,7 +1180,13 @@ function render(){
   }
 
   const tbody = el('tableBody');
-  tbody.innerHTML = filtered.map(h => `
+  tbody.innerHTML = filtered.map(h => {
+    const capLower = (h.cap || '').toLowerCase();
+    const capClass = capLower.includes('large') ? 'cap-large' :
+                     capLower.includes('mid') ? 'cap-mid' :
+                     capLower.includes('small') ? 'cap-small' : 'cap-micro';
+
+    return `
     <tr>
       <td>
         ${escapeHtml(h.name)}
@@ -849,6 +1196,7 @@ function render(){
         </span>
       </td>
       <td><button class="hide-btn" title="Hide ${escapeHtml(h.name)}" data-hide="${escapeHtml(h.name)}">✕</button></td>
+      <td style="text-align:left;"><span class="cap-badge ${capClass}">${escapeHtml(h.cap)}</span></td>
       <td class="num">${h.qty.toLocaleString('en-IN')}</td>
       <td class="num">${fmt2(h.avgPrice)}</td>
       <td class="num" ${h.priceStale ? 'style="color:var(--gold)" title="Price fetch failed — showing last known"' : ''}>${fmt2(h.ltp)}${h.priceStale ? ' *' : ''}</td>
@@ -856,7 +1204,7 @@ function render(){
       <td class="num">${fmt(h.curVal)}</td>
       <td class="num"><span class="pct-pill ${h.pct>=0?'up':'down'}">${h.pct>=0?'+':''}${h.pct.toFixed(2)}%</span></td>
     </tr>
-  `).join('');
+  `}).join('');
 
   tbody.querySelectorAll('[data-hide]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -891,11 +1239,62 @@ el('searchInput').addEventListener('input', render);
 el('settingsBtn').addEventListener('click', () => el('settingsPanel').classList.toggle('open'));
 el('closeSettingsBtn').addEventListener('click', () => el('settingsPanel').classList.remove('open'));
 el('saveSettingsBtn').addEventListener('click', () => {
-  saveSettings(el('pubIdInput').value, el('primaryGidInput').value, el('newEntryGidInput').value, el('xirrGidInput').value);
+  saveSettings(
+    el('pubIdInput').value,
+    el('primaryGidInput').value,
+    el('newEntryGidInput').value,
+    el('dashboardGidInput').value,
+    el('xirrGidInput').value
+  );
   el('settingsPanel').classList.remove('open');
   fetchAll();
 });
 el('refreshBtn').addEventListener('click', fetchAll);
+
+el('syncTabBtn').addEventListener('click', async () => {
+  if(!gasUrl){
+    el('scriptPanel').classList.add('open');
+    return;
+  }
+  const prevText = el('syncTabBtn').textContent;
+  el('syncTabBtn').textContent = 'Syncing…';
+  el('syncTabBtn').disabled = true;
+  try {
+    await syncDashboardToSheet(holdings);
+    el('syncTabBtn').textContent = 'Synced ✓';
+    setTimeout(() => {
+      el('syncTabBtn').textContent = prevText;
+      el('syncTabBtn').disabled = false;
+    }, 2000);
+  } catch(e) {
+    alert('Sync error: ' + e.message);
+    el('syncTabBtn').textContent = prevText;
+    el('syncTabBtn').disabled = false;
+  }
+});
+
+el('scriptBtn').addEventListener('click', () => el('scriptPanel').classList.toggle('open'));
+el('closeScriptBtn').addEventListener('click', () => el('scriptPanel').classList.remove('open'));
+el('saveScriptGasUrlBtn').addEventListener('click', () => {
+  saveGasUrl(el('scriptGasUrlInput').value);
+  alert('Apps Script URL saved.');
+});
+el('manualSyncBtn').addEventListener('click', async () => {
+  const url = el('scriptGasUrlInput').value.trim();
+  if(!url){ alert('Enter and save your Apps Script URL first.'); return; }
+  saveGasUrl(url);
+  el('manualSyncBtn').textContent = 'Pushing to Sheet…';
+  try {
+    await syncDashboardToSheet(holdings);
+    el('manualSyncBtn').textContent = 'Pushed Successfully ✓';
+    setTimeout(() => {
+      el('manualSyncBtn').textContent = 'Push Stock List to Tab 2078289519 Now';
+    }, 2500);
+  } catch(e) {
+    alert('Push error: ' + e.message);
+    el('manualSyncBtn').textContent = 'Push Stock List to Tab 2078289519 Now';
+  }
+});
 
 el('logBuyBtn').addEventListener('click', () => el('logBuyPanel').classList.toggle('open'));
 el('closeLogBuyBtn').addEventListener('click', () => el('logBuyPanel').classList.remove('open'));
