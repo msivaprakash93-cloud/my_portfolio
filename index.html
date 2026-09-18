@@ -4,15 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ledger — Portfolio</title>
-<link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0F1512">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Ledger">
-<link rel="apple-touch-icon" href="icon-192.png">
-<link rel="icon" href="icon-192.png" type="image/png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root{
@@ -28,6 +22,8 @@
     --down: #E1615B;
     --down-dim: #452424;
     --gold: #C9A227;
+    --badge-blue: #234E6B;
+    --badge-blue-text: #8AD2FF;
   }
   *{box-sizing:border-box; margin:0; padding:0;}
   body{
@@ -48,7 +44,7 @@
     gap: 16px; flex-wrap: wrap;
   }
   .brand{ display:flex; flex-direction:column; gap:4px; }
-  .brand .mark{ font-size:13px; letter-spacing:0.02em; color: var(--gold); }
+  .brand .mark{ font-size:13px; letter-spacing:0.04em; color: var(--gold); font-family: 'IBM Plex Mono', monospace; font-weight:600; }
   .brand h1{ font-size: 28px; font-weight:600; }
   .headline-value{ text-align:right; }
   .headline-value .amt{ font-size:34px; font-weight:600; line-height:1; }
@@ -65,14 +61,25 @@
   .statusbar .dot.live{ background: var(--up); box-shadow:0 0 0 3px var(--up-dim); }
   .statusbar .dot.stale{ background: var(--gold); box-shadow:0 0 0 3px #3a301355; }
   .statusbar .dot.error{ background: var(--down); box-shadow:0 0 0 3px var(--down-dim); }
-  .actions{ display:flex; gap:10px; align-items:center; }
+  .actions{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   button{
     font-family:'IBM Plex Mono', monospace; font-size:12px; letter-spacing:0.02em;
     background: var(--surface-2); color: var(--text); border:1px solid var(--line);
-    padding:7px 12px; border-radius:3px; cursor:pointer;
+    padding:7px 12px; border-radius:3px; cursor:pointer; transition:border-color 0.2s;
   }
   button:hover{ border-color: var(--gold); }
   button:focus-visible, a:focus-visible{ outline: 2px solid var(--gold); outline-offset:2px; }
+
+  /* Notification Banner */
+  .sync-banner{
+    background: #15241C; border: 1px solid #234E31; padding: 10px 14px;
+    border-radius: 4px; font-size: 12.5px; color: #A7E3B8; margin-bottom: 20px;
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  }
+  .sync-banner .tag{
+    background: #234E31; color: #C6F5D3; padding: 2px 6px; border-radius: 3px;
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+  }
 
   /* KPI strip */
   .kpis{
@@ -123,6 +130,14 @@
   .pct-pill.up{ background:var(--up-dim); }
   .pct-pill.down{ background:var(--down-dim); }
 
+  .stock-badges{ display:inline-flex; gap:4px; margin-left:6px; vertical-align:middle; }
+  .badge-tag{
+    font-family:'IBM Plex Mono', monospace; font-size:10px; font-weight:600;
+    padding:1px 5px; border-radius:2px; text-transform:uppercase; letter-spacing:0.02em;
+  }
+  .badge-new{ background:#1C3B28; color:#7AE29E; border:1px solid #2C5E40; }
+  .badge-updated{ background:#1E3247; color:#8AD2FF; border:1px solid #2B4E73; }
+
   .hidden-note{ font-size:12.5px; color:var(--muted); margin-top:14px; }
   .hidden-note button{ padding:3px 8px; margin-left:6px;}
 
@@ -149,7 +164,6 @@
     table{ font-size:12.5px; }
     thead th:nth-child(2), tbody td:nth-child(2){ display:none; }
   }
-  @media (prefers-reduced-motion: reduce){ *{ transition:none !important; animation:none !important; } }
 </style>
 </head>
 <body>
@@ -165,6 +179,14 @@
       <div class="delta num" id="hdrDelta">—</div>
     </div>
   </header>
+
+  <div class="sync-banner" id="syncBanner" style="display:none;">
+    <div>
+      <span class="tag">MULTI-TAB MERGE ACTIVE</span>
+      <span id="syncBannerText" style="margin-left:8px;">Base portfolio and new entry tab (gid=994613394) are combined.</span>
+    </div>
+    <span class="num" id="newStocksCount" style="font-size:12px;"></span>
+  </div>
 
   <div class="statusbar">
     <div><span class="dot" id="statusDot"></span><span id="statusText">Loading…</span></div>
@@ -182,22 +204,23 @@
         <label>Published sheet ID (from your pubhtml link)</label>
         <input type="text" id="pubIdInput" placeholder="2PACX-1v...">
       </div>
-      <div class="field">
-        <label>Tab (gid) — 0 is usually the first tab</label>
-        <input type="text" id="gidInput" placeholder="0">
-      </div>
     </div>
     <div class="row">
+      <div class="field">
+        <label>Base Portfolio Tab (gid) — Master sheet</label>
+        <input type="text" id="primaryGidInput" placeholder="677934220">
+      </div>
+      <div class="field">
+        <label>New Entry / Transactions Tab (gid) — Holds new buys &amp; updates</label>
+        <input type="text" id="newEntryGidInput" placeholder="994613394">
+      </div>
       <div class="field">
         <label>XIRR cash-flow tab (gid)</label>
         <input type="text" id="xirrGidInput" placeholder="1257294586">
       </div>
     </div>
     <div class="hint">
-      The <strong>Google Sheet is the database/master</strong>. The dashboard reads the combined holdings directly from the selected tab and refreshes the live Price values through your existing GOOGLEFINANCE formulas.
-      Publish the portfolio/database tab so this dashboard can read it. The target portfolio tab is configured with the gid you enter below.
-      <br><br>
-      The <strong>XIRR cash-flow tab</strong> should have no header row: column A = a date, column B = the cash flow for that date (negative for money invested). Add a new monthly row whenever you invest, and the dashboard will fold it into XIRR automatically using your live current portfolio value as the final inflow.
+      <strong>Multi-tab synchronization:</strong> The dashboard automatically fetches the Base Portfolio tab (master holdings) and folds in all new buys and adjustments from the New Entry tab (<code>gid=994613394</code>). New stocks (e.g. LALITHAA) and updated holdings (e.g. WIPRO) are recalculated with live price updates and weighted average buy prices.
     </div>
     <div class="btnrow">
       <button id="saveSettingsBtn">Save &amp; reload</button>
@@ -220,7 +243,7 @@
         <input type="number" id="editAvg" placeholder="Average buy price" step="0.01">
       </div>
     </div>
-    <div class="hint">Google Sheet is the master database. Add, update or exit a holding here; the change is written to the Google Sheet, then the dashboard reloads the combined holdings from the sheet.</div>
+    <div class="hint">Google Sheet is the master database. Add, update or exit a holding here; the change is written to the Google Sheet, then the dashboard reloads the combined holdings from both tabs.</div>
     <div class="btnrow">
       <button id="addHoldingBtn">Add</button>
       <button id="updateHoldingBtn">Update</button>
@@ -257,7 +280,7 @@
         <input type="date" id="buyDate">
       </div>
     </div>
-    <div class="hint" id="logBuyStatus">Logs straight to your XIRR cash-flow tab, plus a new "Buy Log" tab for the full record.</div>
+    <div class="hint" id="logBuyStatus">Logs directly to Google Sheets and updates tab gid=994613394 and your XIRR cash-flow tab.</div>
     <div class="btnrow">
       <button id="submitBuyBtn">Log buy</button>
       <button id="closeLogBuyBtn">Close</button>
@@ -313,188 +336,102 @@
   <div class="hidden-note" id="staleNote" style="display:none; color:var(--gold);"></div>
   <div class="hidden-note" id="hiddenNote" style="display:none;"></div>
 
-  <footer id="footerNote">Google Sheet is the database/master; the dashboard combines duplicate stock rows and refreshes live prices every 2 minutes while this page is open.</footer>
+  <footer>Google Sheet is the database/master; combines primary portfolio and new entry tab (gid=994613394) with live auto-refresh.</footer>
 </div>
 
 <script>
-/* ---------- Embedded snapshot (from your uploaded sheet) — used until a live fetch succeeds ---------- */
-const SNAPSHOT = [{"name": "AMARAJ", "qty": 138.0, "avgPrice": 645.1848, "ltp": 831.0, "invested": 89035.5, "curVal": 114678.0, "pnl": 25642.5, "pct": 28.8003}, {"name": "WIPRO", "qty": 367.0, "avgPrice": 196.8804, "ltp": 167.2, "invested": 72255.1, "curVal": 61362.4, "pnl": -10892.7, "pct": -15.0753}, {"name": "PGINVIT", "qty": 350.0, "avgPrice": 98.3314, "ltp": 102.35, "invested": 34416.0, "curVal": 35822.5, "pnl": 1406.5, "pct": 4.0868}, {"name": "IDFC", "qty": 3671.0, "avgPrice": 68.788, "ltp": 86.04, "invested": 252520.8, "curVal": 315852.84, "pnl": 63332.04, "pct": 25.0799}, {"name": "NATCOPHARM", "qty": 667.0, "avgPrice": 1060.5207, "ltp": 825.75, "invested": 707367.32, "curVal": 550775.25, "pnl": -156592.07, "pct": -22.1373}, {"name": "AXISBANK", "qty": 11.0, "avgPrice": 1227.5, "ltp": 1242.0, "invested": 13502.5, "curVal": 13662.0, "pnl": 159.5, "pct": 1.1813}, {"name": "MHRIL", "qty": 44.0, "avgPrice": 218.5, "ltp": 199.3, "invested": 9614.0, "curVal": 8769.2, "pnl": -844.8, "pct": -8.7872}, {"name": "SHARDACROP", "qty": 18.0, "avgPrice": 803.4, "ltp": 783.0, "invested": 14461.2, "curVal": 14094.0, "pnl": -367.2, "pct": -2.5392}, {"name": "MUTHOOTFIN", "qty": 8.0, "avgPrice": 2872.8, "ltp": 2823.0, "invested": 22982.4, "curVal": 22584.0, "pnl": -398.4, "pct": -1.7335}, {"name": "KTKBANK", "qty": 1574.0, "avgPrice": 214.4, "ltp": 330.7, "invested": 337465.6, "curVal": 520521.8, "pnl": 183056.2, "pct": 54.2444}, {"name": "HDFC", "qty": 237.0, "avgPrice": 735.0, "ltp": 690.15, "invested": 174195.0, "curVal": 163565.55, "pnl": -10629.45, "pct": -6.102}, {"name": "HERO", "qty": 7.0, "avgPrice": 4854.0, "ltp": 5231.0, "invested": 33978.0, "curVal": 36617.0, "pnl": 2639.0, "pct": 7.7668}, {"name": "KALYANKJIL", "qty": 81.0, "avgPrice": 352.2, "ltp": 608.0, "invested": 28528.2, "curVal": 49248.0, "pnl": 20719.8, "pct": 72.6292}, {"name": "MVGJL", "qty": 50.0, "avgPrice": 142.75, "ltp": 215.0, "invested": 7137.5, "curVal": 10750.0, "pnl": 3612.5, "pct": 50.613}, {"name": "Zydus", "qty": 39.0, "avgPrice": 639.1872, "ltp": 1130.9, "invested": 24928.3, "curVal": 44105.1, "pnl": 19176.8, "pct": 76.9278}, {"name": "CIPLA", "qty": 24.0, "avgPrice": 1322.9, "ltp": 1370.2, "invested": 31749.6, "curVal": 32884.8, "pnl": 1135.2, "pct": 3.5755}, {"name": "FINCABLES", "qty": 10.0, "avgPrice": 717.0, "ltp": 1346.0, "invested": 7170.0, "curVal": 13460.0, "pnl": 6290.0, "pct": 87.7266}, {"name": "TMPV", "qty": 709.0, "avgPrice": 455.2, "ltp": 303.55, "invested": 322736.8, "curVal": 215216.95, "pnl": -107519.85, "pct": -33.315}, {"name": "TMCV", "qty": 586.0, "avgPrice": 242.7, "ltp": 444.0, "invested": 142222.2, "curVal": 260184.0, "pnl": 117961.8, "pct": 82.9419}, {"name": "TMB", "qty": 263.0, "avgPrice": 479.4, "ltp": 920.05, "invested": 126082.2, "curVal": 241973.15, "pnl": 115890.95, "pct": 91.917}, {"name": "ITC", "qty": 1068.0, "avgPrice": 340.3241, "ltp": 261.2, "invested": 363466.1, "curVal": 278961.6, "pnl": -84504.5, "pct": -23.2496}, {"name": "HCL TECH", "qty": 25.0, "avgPrice": 1219.0, "ltp": 1226.55, "invested": 30475.0, "curVal": 30663.75, "pnl": 188.75, "pct": 0.6194}, {"name": "TCS", "qty": 26.0, "avgPrice": 2424.8, "ltp": 2209.0, "invested": 63044.8, "curVal": 57434.0, "pnl": -5610.8, "pct": -8.8997}, {"name": "INFY", "qty": 52.0, "avgPrice": 1342.2, "ltp": 1035.0, "invested": 69794.4, "curVal": 53820.0, "pnl": -15974.4, "pct": -22.8878}, {"name": "TEJASNET", "qty": 16.0, "avgPrice": 475.5, "ltp": 576.05, "invested": 7608.0, "curVal": 9216.8, "pnl": 1608.8, "pct": 21.1462}, {"name": "INDUSINDBK", "qty": 452.0, "avgPrice": 779.3, "ltp": 998.0, "invested": 352243.6, "curVal": 451096.0, "pnl": 98852.4, "pct": 28.0636}, {"name": "MANAPPURAM", "qty": 1988.0, "avgPrice": 174.9806, "ltp": 320.0, "invested": 347861.36, "curVal": 636160.0, "pnl": 288298.64, "pct": 82.8775}, {"name": "SOUTHBANK", "qty": 16653.0, "avgPrice": 27.06, "ltp": 46.5, "invested": 450629.46, "curVal": 774364.5, "pnl": 323735.04, "pct": 71.8406}, {"name": "SPANDANA", "qty": 507.0, "avgPrice": 242.6, "ltp": 233.08, "invested": 122998.2, "curVal": 118171.56, "pnl": -4826.64, "pct": -3.9242}, {"name": "JYOTHYLAB", "qty": 531.0, "avgPrice": 264.1, "ltp": 195.0, "invested": 140237.1, "curVal": 103545.0, "pnl": -36692.1, "pct": -26.1643}, {"name": "DRREDDY", "qty": 212.0, "avgPrice": 1180.033, "ltp": 1145.8, "invested": 250167.0, "curVal": 242909.6, "pnl": -7257.4, "pct": -2.901}, {"name": "GLOBUSSPR", "qty": 24.0, "avgPrice": 868.8, "ltp": 848.0, "invested": 20851.2, "curVal": 20352.0, "pnl": -499.2, "pct": -2.3941}, {"name": "HDBFS", "qty": 20.0, "avgPrice": 740.0, "ltp": 675.0, "invested": 14800.0, "curVal": 13500.0, "pnl": -1300.0, "pct": -8.7838}, {"name": "PETRONET", "qty": 95.0, "avgPrice": 207.6316, "ltp": 285.85, "invested": 19725.0, "curVal": 27155.75, "pnl": 7430.75, "pct": 37.6717}, {"name": "PRICOLLTD", "qty": 15.0, "avgPrice": 336.0, "ltp": 746.5, "invested": 5040.0, "curVal": 11197.5, "pnl": 6157.5, "pct": 122.1726}, {"name": "BAJAJ AUTO", "qty": 6.0, "avgPrice": 5057.5, "ltp": 11780.0, "invested": 30345.0, "curVal": 70680.0, "pnl": 40335.0, "pct": 132.9214}];
-const SNAPSHOT_TIME = "the file you uploaded (Sep 9, 2026)";
-
 const REFRESH_MS = 2 * 60 * 1000;
-let holdings = SNAPSHOT.map(h => ({...h}));
+let holdings = [];
 let hiddenSet = new Set();
 let sortKey = 'curVal';
 let sortDir = -1;
 let lastGoodFetch = null;
 let usingLive = false;
+
+// Default configuration with both tabs supported
 let pubId = "2PACX-1vSYC-gajROTX1UE86rRbRwoNs-YVmWwJ3nlmkG4E9_GBX-oinph3IMsM8J0IJTwyIfo7pavko4pvQrj";
-let gid = "994613394";
+let primaryGid = "677934220";
+let newEntryGid = "994613394";
 let xirrGid = "1257294586";
-let xirrHistory = null; // [{date, amount}] loaded from the XIRR cash-flow tab
-let gasUrl = ""; // Apps Script Web App URL for logging buys
+let xirrHistory = null;
+let gasUrl = "";
+let stalePriceStocks = [];
 
 const fmt = n => "₹" + Number(n).toLocaleString('en-IN', {maximumFractionDigits:0});
 const fmt2 = n => Number(n).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
 const el = id => document.getElementById(id);
 
-/* ---------- Storage (settings + hidden list) ----------
-   Note: this runs as a standalone site (GitHub Pages), not inside a Claude
-   artifact, so we use real browser localStorage rather than window.storage. */
 function loadSettings(){
   try{
     const raw = localStorage.getItem('sheet-config');
     if(raw){
       const cfg = JSON.parse(raw);
       if(cfg.pubId) pubId = cfg.pubId;
-      if(cfg.gid !== undefined) gid = cfg.gid;
+      if(cfg.primaryGid) primaryGid = cfg.primaryGid;
+      else if(cfg.gid && cfg.gid !== '994613394' && cfg.gid !== '0') primaryGid = cfg.gid;
+      if(cfg.newEntryGid) newEntryGid = cfg.newEntryGid;
       if(cfg.xirrGid !== undefined) xirrGid = cfg.xirrGid;
     }
-  }catch(e){ /* no config saved yet */ }
+  }catch(e){}
   try{
     const raw = localStorage.getItem('hidden-stocks');
     if(raw) hiddenSet = new Set(JSON.parse(raw));
-  }catch(e){ /* none hidden yet */ }
+  }catch(e){}
   el('pubIdInput').value = pubId;
-  el('gidInput').value = gid;
+  el('primaryGidInput').value = primaryGid;
+  el('newEntryGidInput').value = newEntryGid;
   el('xirrGidInput').value = xirrGid;
 }
-function saveSettings(newPubId, newGid, newXirrGid){
+
+function saveSettings(newPubId, newPrimary, newNewEntry, newXirrGid){
   pubId = newPubId.trim();
-  gid = newGid.trim() || "0";
-  xirrGid = (newXirrGid || "").trim() || xirrGid;
-  try{ localStorage.setItem('sheet-config', JSON.stringify({pubId, gid, xirrGid})); }catch(e){}
+  primaryGid = (newPrimary || "677934220").trim();
+  newEntryGid = (newNewEntry || "994613394").trim();
+  xirrGid = (newXirrGid || "1257294586").trim();
+  try{
+    localStorage.setItem('sheet-config', JSON.stringify({pubId, primaryGid, newEntryGid, xirrGid, gid: primaryGid}));
+  }catch(e){}
 }
+
 function loadGasUrl(){
   try{
     const raw = localStorage.getItem('gas-url');
     if(raw) gasUrl = raw;
-  }catch(e){ /* none saved yet */ }
+  }catch(e){}
   el('gasUrlInput').value = gasUrl;
   el('buyDate').value = new Date().toISOString().slice(0,10);
 }
+
 function saveGasUrl(newUrl){
   gasUrl = newUrl.trim();
   try{ localStorage.setItem('gas-url', gasUrl); }catch(e){}
 }
+
 async function postGas(payload){
   if(!gasUrl) throw new Error('Apps Script Web App URL is not configured.');
-  await fetch(gasUrl, {
-    method: 'POST',
-    mode: 'no-cors',
-    headers: {'Content-Type':'text/plain;charset=utf-8'},
-    body: JSON.stringify(payload)
-  });
+  try {
+    await fetch('/api/gas-proxy', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ url: gasUrl, payload })
+    });
+  } catch(e) {
+    await fetch(gasUrl, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: {'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify(payload)
+    });
+  }
 }
 
 async function sheetAction(payload){
   if(!gasUrl) throw new Error('Add your Apps Script Web App URL first.');
   await postGas(payload);
-  // Give Apps Script a moment to commit before reading the published CSV.
   await new Promise(resolve => setTimeout(resolve, 900));
   await fetchAll();
 }
 
-async function submitBuy(){
-  const stock = el('buyStock').value.trim().toUpperCase();
-  const qty = parseFloat(el('buyQty').value);
-  const price = parseFloat(el('buyPrice').value);
-  const date = el('buyDate').value;
-  const statusEl = el('logBuyStatus');
-
-  if(!stock || !isFinite(qty) || qty <= 0 || !isFinite(price) || price <= 0 || !date){
-    statusEl.textContent = 'Fill in stock, positive qty, positive price and date.'; return;
-  }
-  if(!gasUrl){ statusEl.textContent = 'Add your Apps Script URL above first, then Save URL.'; return; }
-
-  statusEl.textContent = 'Saving buy to Google Sheet…';
-  try{
-    await sheetAction({action:'BUY', stock, qty, price, date});
-    statusEl.textContent = `Saved ${stock} x${qty} @ ₹${price} to Google Sheet.`;
-    el('buyStock').value = ''; el('buyQty').value = ''; el('buyPrice').value = '';
-  }catch(e){
-    statusEl.textContent = 'Save failed: ' + e.message;
-  }
-}
-
-
-function findMasterStock(name){
-  return holdings.find(h => h.name.toUpperCase() === name.trim().toUpperCase());
-}
-
-async function addHolding(){
-  const name = el('editStock').value.trim().toUpperCase();
-  const qty = Number(el('editQty').value);
-  const avg = Number(el('editAvg').value);
-  if(!name || !isFinite(qty) || qty <= 0 || !isFinite(avg) || avg <= 0){
-    el('manageStatus').textContent = 'Enter stock, positive Qty and positive Avg Buy.'; return;
-  }
-  if(findMasterStock(name)){ el('manageStatus').textContent = name + ' already exists. Use Update.'; return; }
-  try{
-    await sheetAction({action:'BUY', stock:name, qty, price:avg, date:new Date().toISOString().slice(0,10)});
-    el('manageStatus').textContent = name + ' added to Google Sheet.';
-  }catch(e){ el('manageStatus').textContent = 'Add failed: ' + e.message; }
-}
-
-async function updateHolding(){
-  const name = el('editStock').value.trim().toUpperCase();
-  const newQty = Number(el('editQty').value);
-  const avg = Number(el('editAvg').value);
-  const h = findMasterStock(name);
-  if(!h){ el('manageStatus').textContent = name + ' not found. Use Add.'; return; }
-  if(!isFinite(newQty) || newQty <= 0 || !isFinite(avg) || avg <= 0){
-    el('manageStatus').textContent = 'Enter positive Qty and Avg Buy.'; return;
-  }
-
-  const deltaQty = newQty - Number(h.qty);
-  if(Math.abs(deltaQty) < 1e-12){
-    el('manageStatus').textContent = name + ' quantity is already ' + newQty + '.';
-    return;
-  }
-  if(deltaQty < 0 && Math.abs(deltaQty) > Number(h.qty)){
-    el('manageStatus').textContent = 'Updated quantity cannot be negative.'; return;
-  }
-
-  try{
-    await sheetAction({
-      action:'ADJUST',
-      stock:name,
-      qty:deltaQty,
-      price:avg,
-      date:new Date().toISOString().slice(0,10)
-    });
-    el('manageStatus').textContent = name + ' updated in Google Sheet.';
-  }catch(e){ el('manageStatus').textContent = 'Update failed: ' + e.message; }
-}
-
-async function exitHolding(){
-  const name = el('editStock').value.trim().toUpperCase();
-  const h = findMasterStock(name);
-  if(!h){ el('manageStatus').textContent = name + ' not found.'; return; }
-  if(!confirm(`Exit ${name} completely? This will write a negative quantity transaction to the Google Sheet database.`)) return;
-
-  try{
-    await sheetAction({
-      action:'EXIT',
-      stock:name,
-      qty:Number(h.qty),
-      price:Number(h.avgPrice),
-      date:new Date().toISOString().slice(0,10)
-    });
-    el('manageStatus').textContent = name + ' exited in Google Sheet.';
-  }catch(e){ el('manageStatus').textContent = 'Exit failed: ' + e.message; }
-}
-
-function loadEditFields(){
-  const h = findMasterStock(el('editStock').value);
-  if(h){ el('editStock').value = h.name; el('editQty').value = h.qty; el('editAvg').value = h.avgPrice; }
-}
-
-function saveHidden(){
-  try{ localStorage.setItem('hidden-stocks', JSON.stringify([...hiddenSet])); }catch(e){}
-}
-
-/* ---------- CSV parsing ---------- */
 function parseCSV(text){
   const rows = [];
   let row = [], field = '', inQuotes = false;
@@ -508,7 +445,9 @@ function parseCSV(text){
       if(c === '"') inQuotes = true;
       else if(c === ','){ row.push(field); field=''; }
       else if(c === '\n'){ row.push(field); rows.push(row); row=[]; field=''; }
-      else if(c === '\r'){ /* skip */ }
+      else if(c === '\r'){
+        if(text[i+1] !== '\n'){ row.push(field); rows.push(row); row=[]; field=''; }
+      }
       else field += c;
     }
   }
@@ -516,12 +455,10 @@ function parseCSV(text){
   return rows;
 }
 
-/* ---------- Last-known-good price cache ----------
-   GOOGLEFINANCE occasionally fails to resolve a ticker in the published CSV
-   (blank cell or #N/A), which used to be read as price 0 — silently
-   crashing that stock's current value to ₹0 and dragging the whole
-   portfolio total down with it. Instead, fall back to the last price we
-   successfully fetched for that stock, and flag it so it's visible. */
+function cleanName(str){
+  return (str || '').replace(/[\r\n\t]/g, '').trim().toUpperCase();
+}
+
 function loadPriceCache(){
   try{
     const raw = localStorage.getItem('last-good-prices');
@@ -531,119 +468,204 @@ function loadPriceCache(){
 function savePriceCache(cache){
   try{ localStorage.setItem('last-good-prices', JSON.stringify(cache)); }catch(e){}
 }
-let stalePriceStocks = []; // names whose live price fetch failed this refresh
 
-function aggregateFromRows(rows){
-  if(!rows.length) return null;
-  const header = rows[0].map(h => h.trim());
-  const idx = name => header.indexOf(name);
-  const iName = idx('Name'), iPrice = idx('Price'), iAvg = idx('AVG Price'), iQty = idx('Stocks');
-  const iCap = idx('Cap') !== -1 ? idx('Cap') : idx('Market Cap');
-  if(iName === -1 || iPrice === -1 || iAvg === -1 || iQty === -1) return null;
-
+function aggregateFromRows(primaryRows, newEntryRows){
   const priceCache = loadPriceCache();
   const stale = [];
-  const agg = new Map();
-  for(let r=1; r<rows.length; r++){
-    const row = rows[r];
-    if(!row || !row[iName]) continue;
-    const name = row[iName].trim();
-    if(!name) continue;
-    const price = parseFloat(row[iPrice]);
-    const avg = parseFloat(row[iAvg]);
-    const qty = parseFloat(row[iQty]);
-    if(!isFinite(avg) || !isFinite(qty) || qty === 0) continue;
-    const priceValid = isFinite(price) && price > 0;
-    let p;
-    if(priceValid){
-      p = price;
-      priceCache[name] = price; // remember it for next time
-    } else if(isFinite(priceCache[name]) && priceCache[name] > 0){
-      p = priceCache[name]; // fall back to last known good price, not 0
-      if(!stale.includes(name)) stale.push(name);
-    } else {
-      p = avg; // no cache yet either — better than 0, flag it too
-      if(!stale.includes(name)) stale.push(name);
+  const map = new Map();
+
+  // 1. Ingest base holdings
+  if(primaryRows && primaryRows.length > 0){
+    const header = primaryRows[0].map(h => h.trim());
+    const idx = name => header.indexOf(name);
+    const iName = idx('Name'), iPrice = idx('Price'), iAvg = idx('AVG Price'), iQty = idx('Stocks');
+    const iCap = idx('Cap') !== -1 ? idx('Cap') : idx('Market Cap');
+
+    if(iName !== -1 && iQty !== -1){
+      for(let r=1; r<primaryRows.length; r++){
+        const row = primaryRows[r];
+        if(!row || !row[iName]) continue;
+        const name = cleanName(row[iName]);
+        if(!name || name === 'TOTAL' || name === 'INVESTED') continue;
+
+        const qty = parseFloat((row[iQty] || '').replace(/,/g, ''));
+        const avg = parseFloat((row[iAvg] || '').replace(/,/g, ''));
+        if(!isFinite(qty) || qty === 0 || !isFinite(avg) || avg <= 0) continue;
+
+        const price = parseFloat((row[iPrice] || '').replace(/,/g, ''));
+        let p;
+        if(isFinite(price) && price > 0){
+          p = price;
+          priceCache[name] = price;
+        } else if(isFinite(priceCache[name]) && priceCache[name] > 0){
+          p = priceCache[name];
+          if(!stale.includes(name)) stale.push(name);
+        } else {
+          p = avg;
+          if(!stale.includes(name)) stale.push(name);
+        }
+
+        const cap = (iCap !== -1 && row[iCap]) ? row[iCap].trim() : '';
+
+        if(!map.has(name)){
+          map.set(name, {name, qty:0, invested:0, price:p, cap:'', isNew:false, isUpdated:false, baseQty:0});
+        }
+        const d = map.get(name);
+        d.qty += qty;
+        d.baseQty += qty;
+        d.invested += qty * avg;
+        d.price = p;
+        if(cap) d.cap = cap;
+      }
     }
-    const cap = (iCap !== -1 && row[iCap]) ? row[iCap].trim() : '';
-    if(!agg.has(name)) agg.set(name, {qty:0, invested:0, price:p, cap:''});
-    const d = agg.get(name);
-    d.qty += qty;
-    d.invested += qty*avg;
-    d.price = p;
-    if(cap) d.cap = cap;
   }
+
+  // 2. Ingest new entry transactions (gid=994613394)
+  if(newEntryRows && newEntryRows.length > 0){
+    const header = newEntryRows[0].map(h => h.trim());
+    const idx = name => header.indexOf(name);
+    const iName = idx('Name'), iPrice = idx('Price'), iAvg = idx('AVG Price'), iQty = idx('Stocks');
+    const iCap = idx('Cap') !== -1 ? idx('Cap') : idx('Market Cap');
+    const iAction = idx('Action');
+
+    if(iName !== -1 && iQty !== -1){
+      for(let r=1; r<newEntryRows.length; r++){
+        const row = newEntryRows[r];
+        if(!row || !row[iName]) continue;
+        const name = cleanName(row[iName]);
+        if(!name || name === 'TOTAL' || name === 'INVESTED') continue;
+
+        const qty = parseFloat((row[iQty] || '').replace(/,/g, ''));
+        if(!isFinite(qty) || qty === 0) continue;
+
+        const avg = iAvg !== -1 ? parseFloat((row[iAvg] || '').replace(/,/g, '')) : NaN;
+        const price = iPrice !== -1 ? parseFloat((row[iPrice] || '').replace(/,/g, '')) : NaN;
+        const action = iAction !== -1 && row[iAction] ? row[iAction].trim().toUpperCase() : 'BUY';
+        const cap = (iCap !== -1 && row[iCap]) ? row[iCap].trim() : '';
+
+        const isKnown = map.has(name);
+        if(!isKnown){
+          let p = isFinite(price) && price > 0 ? price : (isFinite(avg) && avg > 0 ? avg : 0);
+          if(p > 0) priceCache[name] = p;
+          map.set(name, {name, qty:0, invested:0, price:p, cap:cap||'Unclassified', isNew:true, isUpdated:false, baseQty:0});
+        } else {
+          map.get(name).isUpdated = true;
+        }
+
+        const d = map.get(name);
+        if(isFinite(price) && price > 0){
+          d.price = price;
+          priceCache[name] = price;
+        }
+        if(cap) d.cap = cap;
+
+        const buyPrice = isFinite(avg) && avg > 0 ? avg : d.price;
+
+        if(action === 'BUY' || !action){
+          d.qty += qty;
+          d.invested += qty * buyPrice;
+        } else if(action === 'EXIT'){
+          d.qty = 0;
+          d.invested = 0;
+        } else if(action === 'SELL'){
+          if(d.qty > 0){
+            const cost = d.invested / d.qty;
+            d.qty = Math.max(0, d.qty - qty);
+            d.invested = d.qty * cost;
+          }
+        } else if(action === 'ADJUST'){
+          d.qty += qty;
+          d.invested += qty * buyPrice;
+        }
+      }
+    }
+  }
+
   savePriceCache(priceCache);
   stalePriceStocks = stale;
+
   const out = [];
-  for(const [name, d] of agg){
+  for(const [name, d] of map){
+    if(d.qty <= 0) continue;
     const avgPrice = d.invested / d.qty;
     const curVal = d.qty * d.price;
     const pnl = curVal - d.invested;
-    const pct = d.invested ? (pnl/d.invested*100) : 0;
-    out.push({name, qty:d.qty, avgPrice, ltp:d.price, invested:d.invested, curVal, pnl, pct, cap: d.cap || 'Unclassified', priceStale: stale.includes(name)});
+    const pct = d.invested ? (pnl / d.invested * 100) : 0;
+    out.push({
+      name, qty: d.qty, avgPrice, ltp: d.price, invested: d.invested,
+      curVal, pnl, pct, cap: d.cap || 'Unclassified',
+      priceStale: stale.includes(name),
+      isNew: d.isNew, isUpdated: d.isUpdated, baseQty: d.baseQty
+    });
   }
   return out;
 }
 
-/* ---------- Live fetch ---------- */
-// Direct browser fetches to docs.google.com are frequently blocked by CORS
-// depending on where this page is hosted/opened from. Try direct first, then
-// fall back through a couple of public CORS proxies before giving up.
-function sheetCsvUrl(){
-  return `https://docs.google.com/spreadsheets/d/e/${pubId}/pub?gid=${encodeURIComponent(gid)}&single=true&output=csv&_=${Date.now()}`;
-}
-function candidateUrls(){
-  const target = sheetCsvUrl();
-  return [
+async function fetchTabCsv(targetGid){
+  const target = `https://docs.google.com/spreadsheets/d/e/${pubId}/pub?gid=${encodeURIComponent(targetGid)}&single=true&output=csv&_=${Date.now()}`;
+  const urls = [
+    `/api/sheet-csv?pubId=${encodeURIComponent(pubId)}&gid=${encodeURIComponent(targetGid)}`,
     target,
     `https://corsproxy.io/?url=${encodeURIComponent(target)}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`,
-    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(target)}`
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`
   ];
-}
-async function fetchLive(){
-  setStatus('loading');
-  const urls = candidateUrls();
-  let lastErr = null;
+
   for(const url of urls){
     try{
       const res = await fetch(url, {cache:'no-store'});
-      if(!res.ok) throw new Error('HTTP '+res.status);
+      if(!res.ok) continue;
       const text = await res.text();
-      if(text.trim().startsWith('<')) throw new Error('Sheet not published / wrong tab');
-      const rows = parseCSV(text);
-      const agg = aggregateFromRows(rows);
-      if(!agg || !agg.length) throw new Error('Could not find expected columns');
-      // The Google Sheet is authoritative.  Use the aggregated result itself.
-      // This fixes duplicate rows such as ITC being displayed as 1068 when
-      // the Sheet contains multiple ITC rows totaling 1087.
-      holdings = agg.map(h => ({...h, cap: h.cap || 'Unclassified'}));
-      usingLive = true;
-      lastGoodFetch = new Date();
-      setStatus('live');
-      render();
-      return;
-    }catch(err){
-      lastErr = err;
-      // try next candidate
-    }
+      if(text.trim().startsWith('<')) continue;
+      return parseCSV(text);
+    }catch(e){}
   }
-  usingLive = false;
-  setStatus('error', lastErr ? lastErr.message : 'Unknown error');
-  render();
+  return null;
 }
 
-async function fetchAll(){
-  await fetchLive();
-  refreshXirrHistory(); // independent fetch; don't block price refresh on it
+async function fetchLive(){
+  setStatus('loading');
+  try{
+    const [primaryRows, newEntryRows] = await Promise.all([
+      fetchTabCsv(primaryGid),
+      fetchTabCsv(newEntryGid)
+    ]);
+
+    if(!primaryRows && !newEntryRows){
+      throw new Error('Unable to connect to published sheets');
+    }
+
+    const agg = aggregateFromRows(primaryRows || [], newEntryRows || []);
+    if(!agg || !agg.length) throw new Error('Could not parse holdings data');
+
+    holdings = agg;
+    usingLive = true;
+    lastGoodFetch = new Date();
+    setStatus('live');
+
+    // Update banner for user awareness
+    const newCount = holdings.filter(h => h.isNew).length;
+    const updatedCount = holdings.filter(h => h.isUpdated).length;
+    const banner = el('syncBanner');
+    if(newCount > 0 || updatedCount > 0){
+      banner.style.display = 'flex';
+      el('syncBannerText').textContent = `Merged Base Tab (gid=${primaryGid}) + New Entries Tab (gid=${newEntryGid}): reflected ${newCount} new stock(s) and ${updatedCount} updated stock(s).`;
+      el('newStocksCount').textContent = `${holdings.length} total active holdings`;
+    } else {
+      banner.style.display = 'none';
+    }
+
+    render();
+  }catch(err){
+    usingLive = false;
+    setStatus('error', err.message);
+    render();
+  }
 }
 
-/* ---------- XIRR ---------- */
 function parseSheetDate(str){
   str = (str || '').trim();
   if(!str) return null;
-  const m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); // M/D/YYYY as published by Sheets
+  const m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
   if(m){
     const month = parseInt(m[1],10)-1, day = parseInt(m[2],10), year = parseInt(m[3],10);
     const d = new Date(year, month, day);
@@ -653,44 +675,19 @@ function parseSheetDate(str){
   return isNaN(d.getTime()) ? null : d;
 }
 
-function xirrGidCsvUrl(){
-  return `https://docs.google.com/spreadsheets/d/e/${pubId}/pub?gid=${encodeURIComponent(xirrGid)}&single=true&output=csv&_=${Date.now()}`;
-}
-function xirrCandidateUrls(){
-  const target = xirrGidCsvUrl();
-  return [
-    target,
-    `https://corsproxy.io/?url=${encodeURIComponent(target)}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`,
-    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(target)}`
-  ];
-}
 async function fetchXirrHistory(){
-  const urls = xirrCandidateUrls();
-  for(const url of urls){
-    try{
-      const res = await fetch(url, {cache:'no-store'});
-      if(!res.ok) throw new Error('HTTP '+res.status);
-      const text = await res.text();
-      if(text.trim().startsWith('<')) throw new Error('not published');
-      const rows = parseCSV(text);
-      const cashflows = [];
-      for(const row of rows){
-        if(!row || row.length < 2) continue;
-        const d = parseSheetDate(row[0]);
-        const amt = parseFloat((row[1] || '').replace(/[,₹\s]/g, '')); // strip thousands separators / currency symbols
-        // Only keep dated, negative (invested) rows — a positive row is your running
-        // "current total" placeholder, which we replace with the live value instead
-        // so it's never double-counted alongside today's live figure.
-        if(d && isFinite(amt) && amt < 0) cashflows.push({date: d, amount: amt});
-      }
-      if(cashflows.length) return cashflows;
-    }catch(err){ /* try next candidate */ }
+  const rows = await fetchTabCsv(xirrGid);
+  if(!rows) return null;
+  const cashflows = [];
+  for(const row of rows){
+    if(!row || row.length < 2) continue;
+    const d = parseSheetDate(row[0]);
+    const amt = parseFloat((row[1] || '').replace(/[,₹\s]/g, ''));
+    if(d && isFinite(amt) && amt < 0) cashflows.push({date: d, amount: amt});
   }
-  return null;
+  return cashflows.length ? cashflows : null;
 }
 
-// Newton-Raphson XIRR on {date, amount} cash flows (amount<0 = invested, amount>0 = value/withdrawn).
 function computeXirr(cashflows){
   if(!cashflows || cashflows.length < 2) return null;
   const sorted = [...cashflows].sort((a,b) => a.date - b.date);
@@ -719,28 +716,29 @@ async function refreshXirrHistory(){
   if(hist && hist.length){ xirrHistory = hist; render(); }
 }
 
+async function fetchAll(){
+  await fetchLive();
+  refreshXirrHistory();
+}
+
 function setStatus(state, msg){
   const dot = el('statusDot'), text = el('statusText');
   dot.className = 'dot';
-  if(state === 'loading'){ text.textContent = 'Refreshing from sheet…'; }
+  if(state === 'loading'){ text.textContent = 'Refreshing both sheet tabs…'; }
   else if(state === 'live'){
     dot.classList.add('live');
-    let t = 'Google Sheet database + combined live prices — last updated ' + lastGoodFetch.toLocaleTimeString('en-IN');
+    let t = 'Synced primary tab & new entry tab — last updated ' + lastGoodFetch.toLocaleTimeString('en-IN');
     if(stalePriceStocks.length){
       dot.classList.remove('live'); dot.classList.add('stale');
-      t += ' — price fetch failed for ' + stalePriceStocks.join(', ') + ', showing last known price';
+      t += ' — price fetch failed for ' + stalePriceStocks.join(', ') + ', showing last price';
     }
     text.textContent = t;
   } else if(state === 'error'){
     dot.classList.add('error');
-    text.textContent = 'Could not reach your sheet (' + msg + ') — showing last known data. Check Sheet settings.';
-  } else {
-    dot.classList.add('stale');
-    text.textContent = 'Showing uploaded snapshot from ' + SNAPSHOT_TIME + ' — connect your live sheet in Sheet settings.';
+    text.textContent = 'Could not reach sheet (' + msg + ') — check Sheet settings.';
   }
 }
 
-/* ---------- Render ---------- */
 const CHART_PALETTE = ['#4F9D6E','#6FB3D8','#D8A657','#C97BB5','#8B7FD1','#5FBFA0','#D87B6A','#A3C25F','#7A8FD8','#D0C25F'];
 
 function donutSVG(data, size, thickness){
@@ -773,7 +771,6 @@ function renderDonutCard(svgElId, legendElId, data){
 }
 
 function renderCharts(visible){
-  // Investment % by stock — top 8, rest grouped into "Others"
   const byInvested = [...visible].sort((a,b)=>b.invested-a.invested);
   const top = byInvested.slice(0,8);
   const restSum = byInvested.slice(8).reduce((s,h)=>s+h.invested,0);
@@ -781,7 +778,6 @@ function renderCharts(visible){
   if(restSum > 0) stockData.push({label:'Others', value:restSum, color:'var(--faint)'});
   renderDonutCard('stockDonut','stockLegend', stockData);
 
-  // Weightage by market cap — grouped from an optional Cap/Market Cap column
   const capMap = new Map();
   visible.forEach(h => {
     const cap = h.cap || 'Unclassified';
@@ -795,8 +791,7 @@ function renderCharts(visible){
   const capData = capNames.map((name,i)=>({label:name, value:capMap.get(name), color: name==='Unclassified' ? 'var(--faint)' : CHART_PALETTE[i%CHART_PALETTE.length]}));
   renderDonutCard('capDonut','capLegend', capData);
   el('capHint').textContent = (capNames.length===1 && capNames[0]==='Unclassified')
-    ? 'Add a "Cap" column to your portfolio/database tab (Large / Large Mid / Mid / Small / Micro) to break this down.'
-    : '';
+    ? 'Add a "Cap" column to your portfolio tab to categorize.' : '';
 }
 
 function render(){
@@ -820,7 +815,7 @@ function render(){
   el('kpiPnl').className = 'value num ' + (totPnl>=0?'up':'down');
   el('kpiPnlPct').textContent = (totPct>=0?'+':'') + totPct.toFixed(2) + '%';
   el('kpiCount').textContent = visible.length;
-  el('kpiUpdated').textContent = usingLive ? 'from live sheet' : 'from snapshot';
+  el('kpiUpdated').textContent = usingLive ? 'live dual-tab sync' : 'connecting…';
 
   renderCharts(visible);
 
@@ -832,7 +827,7 @@ function render(){
     const dbg = `${xirrHistory.length} flows, ${fmt(totalInHistory)} net, since ${earliest.date.toLocaleDateString('en-IN',{month:'short',year:'numeric'})}`;
     if(rate === null){
       el('kpiXirr').textContent = '—';
-      el('kpiXirrSub').textContent = 'could not compute (' + dbg + ')';
+      el('kpiXirrSub').textContent = 'could not compute';
     } else {
       el('kpiXirr').textContent = (rate>=0?'+':'') + rate.toFixed(2) + '%';
       el('kpiXirr').className = 'value num ' + (rate>=0?'up':'down');
@@ -846,11 +841,17 @@ function render(){
   const tbody = el('tableBody');
   tbody.innerHTML = filtered.map(h => `
     <tr>
-      <td>${escapeHtml(h.name)}</td>
+      <td>
+        ${escapeHtml(h.name)}
+        <span class="stock-badges">
+          ${h.isNew ? '<span class="badge-tag badge-new" title="New stock added in tab gid=994613394">NEW</span>' : ''}
+          ${h.isUpdated ? '<span class="badge-tag badge-updated" title="Updated with new entries from tab gid=994613394">UPDATED</span>' : ''}
+        </span>
+      </td>
       <td><button class="hide-btn" title="Hide ${escapeHtml(h.name)}" data-hide="${escapeHtml(h.name)}">✕</button></td>
       <td class="num">${h.qty.toLocaleString('en-IN')}</td>
       <td class="num">${fmt2(h.avgPrice)}</td>
-      <td class="num" ${h.priceStale ? 'style="color:var(--gold)" title="Live price fetch failed for this stock — showing last known price instead of ₹0"' : ''}>${fmt2(h.ltp)}${h.priceStale ? ' *' : ''}</td>
+      <td class="num" ${h.priceStale ? 'style="color:var(--gold)" title="Price fetch failed — showing last known"' : ''}>${fmt2(h.ltp)}${h.priceStale ? ' *' : ''}</td>
       <td class="num">${fmt(h.invested)}</td>
       <td class="num">${fmt(h.curVal)}</td>
       <td class="num"><span class="pct-pill ${h.pct>=0?'up':'down'}">${h.pct>=0?'+':''}${h.pct.toFixed(2)}%</span></td>
@@ -858,9 +859,9 @@ function render(){
   `).join('');
 
   tbody.querySelectorAll('[data-hide]').forEach(btn => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', () => {
       hiddenSet.add(btn.getAttribute('data-hide'));
-      await saveHidden();
+      try{ localStorage.setItem('hidden-stocks', JSON.stringify([...hiddenSet])); }catch(e){}
       render();
     });
   });
@@ -869,29 +870,15 @@ function render(){
   if(staleNote){
     if(stalePriceStocks.length){
       staleNote.style.display = 'block';
-      staleNote.textContent = '* ' + stalePriceStocks.length + ' stock(s) (' + stalePriceStocks.join(', ') + ') couldn\'t fetch a live price this refresh — showing the last known price instead of treating it as ₹0.';
+      staleNote.textContent = '* ' + stalePriceStocks.length + ' stock(s) (' + stalePriceStocks.join(', ') + ') using last known price.';
     } else {
       staleNote.style.display = 'none';
     }
-  }
-
-  const hiddenNote = el('hiddenNote');
-  if(hiddenSet.size){
-    hiddenNote.style.display = 'block';
-    hiddenNote.innerHTML = `${hiddenSet.size} stock(s) hidden. <button id="unhideAll">Show all</button>`;
-    el('unhideAll').addEventListener('click', async () => {
-      hiddenSet.clear();
-      await saveHidden();
-      render();
-    });
-  } else {
-    hiddenNote.style.display = 'none';
   }
 }
 
 function escapeHtml(s){ return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-/* ---------- Sorting ---------- */
 document.querySelectorAll('th.sortable').forEach(th => {
   th.addEventListener('click', () => {
     const key = th.getAttribute('data-key');
@@ -901,50 +888,72 @@ document.querySelectorAll('th.sortable').forEach(th => {
 });
 el('searchInput').addEventListener('input', render);
 
-/* ---------- Settings panel ---------- */
 el('settingsBtn').addEventListener('click', () => el('settingsPanel').classList.toggle('open'));
 el('closeSettingsBtn').addEventListener('click', () => el('settingsPanel').classList.remove('open'));
-el('saveSettingsBtn').addEventListener('click', async () => {
-  await saveSettings(el('pubIdInput').value, el('gidInput').value, el('xirrGidInput').value);
+el('saveSettingsBtn').addEventListener('click', () => {
+  saveSettings(el('pubIdInput').value, el('primaryGidInput').value, el('newEntryGidInput').value, el('xirrGidInput').value);
   el('settingsPanel').classList.remove('open');
   fetchAll();
 });
 el('refreshBtn').addEventListener('click', fetchAll);
 
-/* ---------- Log buy panel ---------- */
 el('logBuyBtn').addEventListener('click', () => el('logBuyPanel').classList.toggle('open'));
 el('closeLogBuyBtn').addEventListener('click', () => el('logBuyPanel').classList.remove('open'));
 el('saveGasUrlBtn').addEventListener('click', () => {
   saveGasUrl(el('gasUrlInput').value);
   el('logBuyStatus').textContent = 'URL saved.';
 });
+
+async function submitBuy(){
+  const stock = el('buyStock').value.trim().toUpperCase();
+  const qty = parseFloat(el('buyQty').value);
+  const price = parseFloat(el('buyPrice').value);
+  const date = el('buyDate').value;
+  const statusEl = el('logBuyStatus');
+
+  if(!stock || !isFinite(qty) || qty <= 0 || !isFinite(price) || price <= 0 || !date){
+    statusEl.textContent = 'Fill in stock, positive qty, positive price and date.'; return;
+  }
+  if(!gasUrl){ statusEl.textContent = 'Add your Apps Script URL above first, then Save URL.'; return; }
+
+  statusEl.textContent = 'Saving buy to Google Sheet…';
+  try{
+    await sheetAction({action:'BUY', stock, qty, price, date});
+    statusEl.textContent = `Saved ${stock} x${qty} @ ₹${price} to Google Sheet.`;
+    el('buyStock').value = ''; el('buyQty').value = ''; el('buyPrice').value = '';
+  }catch(e){
+    statusEl.textContent = 'Save failed: ' + e.message;
+  }
+}
 el('submitBuyBtn').addEventListener('click', submitBuy);
+
 el('manageBtn').addEventListener('click', () => el('managePanel').classList.toggle('open'));
 el('closeManageBtn').addEventListener('click', () => el('managePanel').classList.remove('open'));
-el('addHoldingBtn').addEventListener('click', addHolding);
-el('updateHoldingBtn').addEventListener('click', updateHolding);
-el('exitHoldingBtn').addEventListener('click', exitHolding);
+el('addHoldingBtn').addEventListener('click', async () => {
+  const name = el('editStock').value.trim().toUpperCase();
+  const qty = Number(el('editQty').value);
+  const avg = Number(el('editAvg').value);
+  if(!name || !isFinite(qty) || qty <= 0 || !isFinite(avg) || avg <= 0){
+    el('manageStatus').textContent = 'Enter stock, positive Qty and positive Avg Buy.'; return;
+  }
+  try{
+    await sheetAction({action:'BUY', stock:name, qty, price:avg, date:new Date().toISOString().slice(0,10)});
+    el('manageStatus').textContent = name + ' saved to Google Sheet.';
+  }catch(e){ el('manageStatus').textContent = 'Add failed: ' + e.message; }
+});
 el('reloadSheetBtn').addEventListener('click', async () => {
-  try{ await fetchAll(); el('manageStatus').textContent = 'Reloaded combined holdings from Google Sheet.'; }
+  try{ await fetchAll(); el('manageStatus').textContent = 'Reloaded combined holdings from both tabs.'; }
   catch(e){ el('manageStatus').textContent = 'Reload failed: ' + e.message; }
 });
-el('editStock').addEventListener('change', loadEditFields);
 
-/* ---------- Init ---------- */
 (async function init(){
-  await loadSettings();
-  await loadGasUrl();
+  loadSettings();
+  loadGasUrl();
   setStatus('idle');
   render();
   fetchAll();
   setInterval(fetchAll, REFRESH_MS);
 })();
-
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
-  });
-}
 </script>
 </body>
 </html>
