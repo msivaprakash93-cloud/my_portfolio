@@ -310,6 +310,7 @@
     </thead>
     <tbody id="tableBody"></tbody>
   </table>
+  <div class="hidden-note" id="staleNote" style="display:none; color:var(--gold);"></div>
   <div class="hidden-note" id="hiddenNote" style="display:none;"></div>
 
   <footer id="footerNote">Google Sheet is the database/master; the dashboard combines duplicate stock rows and refreshes live prices every 2 minutes while this page is open.</footer>
@@ -515,6 +516,23 @@ function parseCSV(text){
   return rows;
 }
 
+/* ---------- Last-known-good price cache ----------
+   GOOGLEFINANCE occasionally fails to resolve a ticker in the published CSV
+   (blank cell or #N/A), which used to be read as price 0 — silently
+   crashing that stock's current value to ₹0 and dragging the whole
+   portfolio total down with it. Instead, fall back to the last price we
+   successfully fetched for that stock, and flag it so it's visible. */
+function loadPriceCache(){
+  try{
+    const raw = localStorage.getItem('last-good-prices');
+    return raw ? JSON.parse(raw) : {};
+  }catch(e){ return {}; }
+}
+function savePriceCache(cache){
+  try{ localStorage.setItem('last-good-prices', JSON.stringify(cache)); }catch(e){}
+}
+let stalePriceStocks = []; // names whose live price fetch failed this refresh
+
 function aggregateFromRows(rows){
   if(!rows.length) return null;
   const header = rows[0].map(h => h.trim());
@@ -523,6 +541,8 @@ function aggregateFromRows(rows){
   const iCap = idx('Cap') !== -1 ? idx('Cap') : idx('Market Cap');
   if(iName === -1 || iPrice === -1 || iAvg === -1 || iQty === -1) return null;
 
+  const priceCache = loadPriceCache();
+  const stale = [];
   const agg = new Map();
   for(let r=1; r<rows.length; r++){
     const row = rows[r];
@@ -533,7 +553,18 @@ function aggregateFromRows(rows){
     const avg = parseFloat(row[iAvg]);
     const qty = parseFloat(row[iQty]);
     if(!isFinite(avg) || !isFinite(qty) || qty === 0) continue;
-    const p = isFinite(price) ? price : 0;
+    const priceValid = isFinite(price) && price > 0;
+    let p;
+    if(priceValid){
+      p = price;
+      priceCache[name] = price; // remember it for next time
+    } else if(isFinite(priceCache[name]) && priceCache[name] > 0){
+      p = priceCache[name]; // fall back to last known good price, not 0
+      if(!stale.includes(name)) stale.push(name);
+    } else {
+      p = avg; // no cache yet either — better than 0, flag it too
+      if(!stale.includes(name)) stale.push(name);
+    }
     const cap = (iCap !== -1 && row[iCap]) ? row[iCap].trim() : '';
     if(!agg.has(name)) agg.set(name, {qty:0, invested:0, price:p, cap:''});
     const d = agg.get(name);
@@ -542,13 +573,15 @@ function aggregateFromRows(rows){
     d.price = p;
     if(cap) d.cap = cap;
   }
+  savePriceCache(priceCache);
+  stalePriceStocks = stale;
   const out = [];
   for(const [name, d] of agg){
     const avgPrice = d.invested / d.qty;
     const curVal = d.qty * d.price;
     const pnl = curVal - d.invested;
     const pct = d.invested ? (pnl/d.invested*100) : 0;
-    out.push({name, qty:d.qty, avgPrice, ltp:d.price, invested:d.invested, curVal, pnl, pct, cap: d.cap || 'Unclassified'});
+    out.push({name, qty:d.qty, avgPrice, ltp:d.price, invested:d.invested, curVal, pnl, pct, cap: d.cap || 'Unclassified', priceStale: stale.includes(name)});
   }
   return out;
 }
@@ -692,7 +725,12 @@ function setStatus(state, msg){
   if(state === 'loading'){ text.textContent = 'Refreshing from sheet…'; }
   else if(state === 'live'){
     dot.classList.add('live');
-    text.textContent = 'Google Sheet database + combined live prices — last updated ' + lastGoodFetch.toLocaleTimeString('en-IN');
+    let t = 'Google Sheet database + combined live prices — last updated ' + lastGoodFetch.toLocaleTimeString('en-IN');
+    if(stalePriceStocks.length){
+      dot.classList.remove('live'); dot.classList.add('stale');
+      t += ' — price fetch failed for ' + stalePriceStocks.join(', ') + ', showing last known price';
+    }
+    text.textContent = t;
   } else if(state === 'error'){
     dot.classList.add('error');
     text.textContent = 'Could not reach your sheet (' + msg + ') — showing last known data. Check Sheet settings.';
@@ -812,7 +850,7 @@ function render(){
       <td><button class="hide-btn" title="Hide ${escapeHtml(h.name)}" data-hide="${escapeHtml(h.name)}">✕</button></td>
       <td class="num">${h.qty.toLocaleString('en-IN')}</td>
       <td class="num">${fmt2(h.avgPrice)}</td>
-      <td class="num">${fmt2(h.ltp)}</td>
+      <td class="num" ${h.priceStale ? 'style="color:var(--gold)" title="Live price fetch failed for this stock — showing last known price instead of ₹0"' : ''}>${fmt2(h.ltp)}${h.priceStale ? ' *' : ''}</td>
       <td class="num">${fmt(h.invested)}</td>
       <td class="num">${fmt(h.curVal)}</td>
       <td class="num"><span class="pct-pill ${h.pct>=0?'up':'down'}">${h.pct>=0?'+':''}${h.pct.toFixed(2)}%</span></td>
@@ -826,6 +864,16 @@ function render(){
       render();
     });
   });
+
+  const staleNote = el('staleNote');
+  if(staleNote){
+    if(stalePriceStocks.length){
+      staleNote.style.display = 'block';
+      staleNote.textContent = '* ' + stalePriceStocks.length + ' stock(s) (' + stalePriceStocks.join(', ') + ') couldn\'t fetch a live price this refresh — showing the last known price instead of treating it as ₹0.';
+    } else {
+      staleNote.style.display = 'none';
+    }
+  }
 
   const hiddenNote = el('hiddenNote');
   if(hiddenSet.size){
