@@ -339,11 +339,16 @@
       </div>
     </div>
     <div class="chart-card">
-      <h3>Weightage by market cap</h3>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+        <h3 style="margin:0;">Weightage by market cap</h3>
+        <span style="background:#24352A; color:#7AE29E; border:1px solid #2C5E40; padding:2px 6px; font-size:10px; font-family:'IBM Plex Mono',monospace; border-radius:3px; font-weight:600;">BY INVESTMENT %</span>
+      </div>
+      <div style="font-size:11px; font-family:'IBM Plex Mono',monospace; color:var(--muted); margin-bottom:12px;">Allocation to Large Cap, Mid Cap &amp; Small Cap by invested capital</div>
       <div class="chart-body">
         <div class="donut-wrap" id="capDonut"></div>
         <div class="legend" id="capLegend"></div>
       </div>
+      <div id="capBarWrap" style="margin-top:12px;"></div>
       <div class="hint" id="capHint"></div>
     </div>
   </div>
@@ -682,13 +687,10 @@ const KNOWN_STOCK_CAPS = {
 function normalizeCap(rawCap){
   if(!rawCap) return '';
   const s = rawCap.trim().toLowerCase();
-  if(s.includes('large mid') || s.includes('large-mid')) return 'Large & Mid Cap';
   if(s.includes('large')) return 'Large Cap';
+  if(s.includes('small') || s.includes('micro')) return 'Small Cap';
   if(s.includes('mid')) return 'Mid Cap';
-  if(s.includes('small')) return 'Small Cap';
-  if(s.includes('micro')) return 'Micro Cap';
-  if(s.includes('unclassified')) return '';
-  return rawCap.trim();
+  return '';
 }
 
 function resolveMarketCap(stockName, explicitCap){
@@ -700,19 +702,22 @@ function resolveMarketCap(stockName, explicitCap){
     if(rawOverrides){
       const overrides = JSON.parse(rawOverrides);
       const clean = cleanName(stockName);
-      if(overrides[clean]) return overrides[clean];
+      if(overrides[clean]) {
+        const norm = normalizeCap(overrides[clean]);
+        if(norm) return norm;
+      }
     }
   } catch(e){}
 
   const clean = cleanName(stockName);
-  if(KNOWN_STOCK_CAPS[clean]) return KNOWN_STOCK_CAPS[clean];
+  if(KNOWN_STOCK_CAPS[clean]) return normalizeCap(KNOWN_STOCK_CAPS[clean]) || 'Mid Cap';
 
   const stripped = clean.replace(/[^A-Z0-9]/g, '');
-  if(KNOWN_STOCK_CAPS[stripped]) return KNOWN_STOCK_CAPS[stripped];
+  if(KNOWN_STOCK_CAPS[stripped]) return normalizeCap(KNOWN_STOCK_CAPS[stripped]) || 'Mid Cap';
 
   for(const [k, v] of Object.entries(KNOWN_STOCK_CAPS)){
     if(clean === k || clean.startsWith(k + ' ') || clean.endsWith(' ' + k)){
-      return v;
+      return normalizeCap(v) || 'Mid Cap';
     }
   }
 
@@ -1100,34 +1105,69 @@ function renderCharts(visible){
   if(restSum > 0) stockData.push({label:'Others', value:restSum, color:'var(--faint)'});
   renderDonutCard('stockDonut','stockLegend', stockData);
 
-  const capMap = new Map();
-  const capCountMap = new Map();
-  visible.forEach(h => {
-    const cap = h.cap || 'Mid Cap';
-    capMap.set(cap, (capMap.get(cap)||0) + h.invested);
-    capCountMap.set(cap, (capCountMap.get(cap)||0) + 1);
-  });
-  const capOrder = ['Large Cap','Large','Large & Mid Cap','Mid Cap','Mid','Small Cap','Small','Micro Cap','Micro','Unclassified'];
-  const capNames = [...capMap.keys()].sort((a,b)=>{
-    const ia = capOrder.findIndex(o => a.toLowerCase().includes(o.toLowerCase()));
-    const ib = capOrder.findIndex(o => b.toLowerCase().includes(o.toLowerCase()));
-    return (ia===-1?99:ia) - (ib===-1?99:ib);
-  });
-  const getCapColor = (name) => {
-    const l = name.toLowerCase();
-    if(l.includes('large')) return '#3B82F6';
-    if(l.includes('mid')) return '#E5C368';
-    if(l.includes('small')) return '#10B981';
-    if(l.includes('micro')) return '#A855F7';
-    return '#8B968E';
+  // MARKET CAP BREAKDOWN STRICTLY BASED ON INVESTMENT PERCENTAGE
+  const totalInvested = visible.reduce((s,h)=>s+(h.invested > 0 ? h.invested : 0), 0) || 1;
+  const buckets = {
+    'Large Cap': { invested: 0, count: 0, color: '#3B82F6' },
+    'Mid Cap': { invested: 0, count: 0, color: '#E5C368' },
+    'Small Cap': { invested: 0, count: 0, color: '#10B981' }
   };
-  const capData = capNames.map((name)=>({
-    label: `${name} (${capCountMap.get(name) || 0})`,
-    value: capMap.get(name),
-    color: getCapColor(name)
-  }));
-  renderDonutCard('capDonut','capLegend', capData);
-  el('capHint').textContent = `${visible.length} stocks categorized by market cap.`;
+
+  visible.forEach(h => {
+    const norm = normalizeCap(h.cap) || 'Mid Cap';
+    if(buckets[norm]){
+      buckets[norm].invested += (h.invested > 0 ? h.invested : 0);
+      buckets[norm].count += 1;
+    } else {
+      buckets['Mid Cap'].invested += (h.invested > 0 ? h.invested : 0);
+      buckets['Mid Cap'].count += 1;
+    }
+  });
+
+  const categories = ['Large Cap', 'Mid Cap', 'Small Cap'];
+  const capData = categories
+    .filter(k => buckets[k].invested > 0)
+    .map(k => ({
+      label: k,
+      value: buckets[k].invested,
+      color: buckets[k].color
+    }));
+
+  el('capDonut').innerHTML = donutSVG(capData, 150, 26);
+
+  el('capLegend').innerHTML = categories.map(k => {
+    const b = buckets[k];
+    const pct = totalInvested > 0 ? (b.invested / totalInvested * 100) : 0;
+    return `
+      <div style="margin-bottom:7px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="swatch" style="background:${b.color}; width:10px; height:10px; border-radius:2px; display:inline-block; flex-shrink:0;"></span>
+            <span style="color:var(--text); font-weight:500; font-size:12.5px;">${escapeHtml(k)} <span style="color:var(--faint); font-family:var(--font-mono); font-size:11px;">(${b.count})</span></span>
+          </div>
+          <span style="font-family:'IBM Plex Mono',monospace; font-weight:600; color:var(--text); font-size:13px;">${pct.toFixed(1)}%</span>
+        </div>
+        <div style="display:flex; justify-content:space-between; font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--muted); padding-left:18px; margin-top:1px;">
+          <span>Invested:</span>
+          <span style="color:var(--text);">${fmt(b.invested)}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  const barWrap = el('capBarWrap');
+  if(barWrap){
+    barWrap.innerHTML = `
+      <div style="height:7px; width:100%; background:var(--surface-2); border-radius:4px; overflow:hidden; display:flex; border:1px solid var(--line);">
+        ${categories.map(k => {
+          const pct = totalInvested > 0 ? (buckets[k].invested / totalInvested * 100) : 0;
+          return pct > 0 ? `<div style="width:${pct}%; background:${buckets[k].color};" title="${k}: ${pct.toFixed(1)}% (${fmt(buckets[k].invested)})"></div>` : '';
+        }).join('')}
+      </div>
+    `;
+  }
+
+  el('capHint').innerHTML = `Total Investment: <strong style="color:var(--text);">${fmt(totalInvested)}</strong> across ${visible.length} stocks.`;
 }
 
 function render(){
