@@ -270,19 +270,32 @@
         <input type="text" id="editStock" placeholder="e.g. CIPLA">
       </div>
       <div class="field">
-        <label>Qty</label>
+        <label>Qty (Shares)</label>
         <input type="number" id="editQty" placeholder="Quantity" step="0.0001">
       </div>
       <div class="field">
-        <label>Avg Buy</label>
+        <label>Avg Buy (₹)</label>
         <input type="number" id="editAvg" placeholder="Average buy price" step="0.01">
       </div>
+      <div class="field">
+        <label>Current LTP (₹)</label>
+        <input type="number" id="editLtp" placeholder="Live Price" step="0.01">
+      </div>
+      <div class="field">
+        <label>Market Cap</label>
+        <select id="editCap" style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;background:var(--surface-2);border:1px solid var(--line);color:var(--text);padding:7px 10px;border-radius:3px;width:180px;">
+          <option value="Large Cap">Large Cap</option>
+          <option value="Mid Cap">Mid Cap</option>
+          <option value="Small Cap">Small Cap</option>
+        </select>
+      </div>
     </div>
-    <div class="hint">Google Sheet is the master database. Add, update or exit a holding here; the change is written to the Google Sheet, then the dashboard reloads the combined holdings from both tabs.</div>
+    <div class="hint">Updates apply immediately to your portfolio and push to Google Sheets. Click any stock in the table to pre-fill.</div>
     <div class="btnrow">
-      <button id="addHoldingBtn">Add</button>
-      <button id="updateHoldingBtn">Update</button>
+      <button id="updateHoldingBtn" style="background:#1E3247;color:#8AD2FF;border-color:#2B4E73;font-weight:600;">Update Stock &amp; Price</button>
+      <button id="addHoldingBtn">Add Shares</button>
       <button id="exitHoldingBtn">Exit</button>
+      <button id="revertOverrideBtn" style="color:var(--gold);">Revert to Sheet</button>
       <button id="reloadSheetBtn">Reload from Sheet</button>
       <button id="closeManageBtn">Close</button>
     </div>
@@ -501,6 +514,39 @@ function parseCSV(text){
   }
   if(field.length || row.length){ row.push(field); rows.push(row); }
   return rows;
+}
+
+function parseCleanNumber(val){
+  if(typeof val === 'number') return isFinite(val) ? val : NaN;
+  if(val === null || val === undefined) return NaN;
+  const str = String(val).replace(/[\u20B9$,\s₹]/g, '').trim();
+  if(!str) return NaN;
+  const parsed = parseFloat(str);
+  return isFinite(parsed) ? parsed : NaN;
+}
+
+function loadUserStockOverrides(){
+  try{
+    const raw = localStorage.getItem('user-stock-overrides');
+    return raw ? JSON.parse(raw) : {};
+  }catch(e){ return {}; }
+}
+
+function saveUserStockOverride(override){
+  try{
+    const cur = loadUserStockOverrides();
+    const clean = cleanName(override.name);
+    cur[clean] = Object.assign({}, cur[clean], override, {name: clean, updatedAt: new Date().toISOString()});
+    localStorage.setItem('user-stock-overrides', JSON.stringify(cur));
+  }catch(e){}
+}
+
+function removeUserStockOverride(name){
+  try{
+    const cur = loadUserStockOverrides();
+    delete cur[cleanName(name)];
+    localStorage.setItem('user-stock-overrides', JSON.stringify(cur));
+  }catch(e){}
 }
 
 function cleanName(str){
@@ -739,8 +785,11 @@ function aggregateFromRows(primaryRows, newEntryRows, dashboardRows){
   const stale = [];
   const map = new Map();
 
-  // 1. Ingest base holdings (from master portfolio or dashboard base if available)
-  const baseRows = (dashboardRows && dashboardRows.length > 1) ? dashboardRows : primaryRows;
+  // ALWAYS prefer primaryRows (Master Portfolio tab) as base.
+  // Only if primaryRows is missing or empty, fallback to dashboardRows.
+  const baseRows = (primaryRows && primaryRows.length > 1)
+    ? primaryRows
+    : (dashboardRows && dashboardRows.length > 1 ? dashboardRows : primaryRows);
 
   if(baseRows && baseRows.length > 0){
     const header = baseRows[0].map(h => h.trim());
@@ -758,11 +807,11 @@ function aggregateFromRows(primaryRows, newEntryRows, dashboardRows){
         const name = cleanName(row[iName]);
         if(!name || name === 'TOTAL' || name === 'INVESTED') continue;
 
-        const qty = parseFloat((row[iQty] || '').replace(/,/g, ''));
-        const avg = parseFloat((row[iAvg] || '').replace(/,/g, ''));
+        const qty = parseCleanNumber(row[iQty]);
+        const avg = parseCleanNumber(row[iAvg]);
         if(!isFinite(qty) || qty === 0 || !isFinite(avg) || avg <= 0) continue;
 
-        const price = parseFloat((row[iPrice] || '').replace(/,/g, ''));
+        const price = parseCleanNumber(row[iPrice]);
         let p;
         if(isFinite(price) && price > 0){
           p = price;
@@ -785,39 +834,42 @@ function aggregateFromRows(primaryRows, newEntryRows, dashboardRows){
         d.qty += qty;
         d.baseQty += qty;
         d.invested += qty * avg;
-        d.price = p;
+        if(isFinite(p) && p > 0) d.price = p;
         if(cap) d.cap = cap;
       }
     }
   }
 
-  // Also fold in primaryRows if dashboardRows was used as base to ensure no master stocks are missed
-  if(dashboardRows && dashboardRows.length > 1 && primaryRows && primaryRows.length > 0){
-    const header = primaryRows[0].map(h => h.trim());
-    const idx = name => header.indexOf(name);
-    const iName = idx('Name') !== -1 ? idx('Name') : idx('Stock');
-    const iPrice = idx('Price') !== -1 ? idx('Price') : idx('Price (LTP)');
-    const iAvg = idx('AVG Price') !== -1 ? idx('AVG Price') : idx('Avg Price');
-    const iQty = idx('Stocks') !== -1 ? idx('Stocks') : (idx('Stocks (Qty)') !== -1 ? idx('Stocks (Qty)') : idx('Qty'));
-    const iCap = idx('Cap') !== -1 ? idx('Cap') : idx('Market Cap');
+  // 1.5 If dashboardRows has any stock that does NOT exist in primaryRows
+  if(baseRows === primaryRows && dashboardRows && dashboardRows.length > 1){
+    const dHeader = dashboardRows[0].map(h => h.trim());
+    const dIdx = name => dHeader.indexOf(name);
+    const diName = dIdx('Name') !== -1 ? dIdx('Name') : dIdx('Stock');
+    const diPrice = dIdx('Price') !== -1 ? dIdx('Price') : dIdx('Price (LTP)');
+    const diAvg = dIdx('AVG Price') !== -1 ? dIdx('AVG Price') : dIdx('Avg Price');
+    const diQty = dIdx('Stocks') !== -1 ? dIdx('Stocks') : (dIdx('Stocks (Qty)') !== -1 ? dIdx('Stocks (Qty)') : dIdx('Qty'));
+    const diCap = dIdx('Cap') !== -1 ? dIdx('Cap') : dIdx('Market Cap');
 
-    if(iName !== -1 && iQty !== -1){
-      for(let r=1; r<primaryRows.length; r++){
-        const row = primaryRows[r];
-        if(!row || !row[iName]) continue;
-        const name = cleanName(row[iName]);
-        if(!name || name === 'TOTAL' || name === 'INVESTED' || map.has(name)) continue;
+    if(diName !== -1 && diQty !== -1 && diAvg !== -1){
+      for(let r=1; r<dashboardRows.length; r++){
+        const row = dashboardRows[r];
+        if(!row || !row[diName]) continue;
+        const name = cleanName(row[diName]);
+        if(!name || name === 'TOTAL' || name === 'INVESTED') continue;
 
-        const qty = parseFloat((row[iQty] || '').replace(/,/g, ''));
-        const avg = parseFloat((row[iAvg] || '').replace(/,/g, ''));
-        if(!isFinite(qty) || qty === 0 || !isFinite(avg) || avg <= 0) continue;
-
-        const price = parseFloat((row[iPrice] || '').replace(/,/g, ''));
-        const p = isFinite(price) && price > 0 ? price : avg;
-        const rawCap = (iCap !== -1 && row[iCap]) ? row[iCap].trim() : '';
-        const cap = resolveMarketCap(name, rawCap);
-
-        map.set(name, {name, qty, invested: qty * avg, price: p, cap, isNew: false, isUpdated: false, baseQty: qty});
+        // CRITICAL: NEVER overwrite fresh live price from primaryRows! Only add missing stocks:
+        if(!map.has(name)){
+          const qty = parseCleanNumber(row[diQty]);
+          const avg = parseCleanNumber(row[diAvg]);
+          if(isFinite(qty) && qty > 0 && isFinite(avg) && avg > 0){
+            const price = parseCleanNumber(row[diPrice]);
+            const p = isFinite(price) && price > 0 ? price : (isFinite(priceCache[name]) && priceCache[name] > 0 ? priceCache[name] : avg);
+            if(p > 0) priceCache[name] = p;
+            const rawCap = (diCap !== -1 && row[diCap]) ? row[diCap].trim() : '';
+            const cap = resolveMarketCap(name, rawCap);
+            map.set(name, {name, qty, invested: qty * avg, price: p, cap, isNew: false, isUpdated: false, baseQty: qty});
+          }
+        }
       }
     }
   }
@@ -840,11 +892,11 @@ function aggregateFromRows(primaryRows, newEntryRows, dashboardRows){
         const name = cleanName(row[iName]);
         if(!name || name === 'TOTAL' || name === 'INVESTED') continue;
 
-        const qty = parseFloat((row[iQty] || '').replace(/,/g, ''));
+        const qty = parseCleanNumber(row[iQty]);
         if(!isFinite(qty) || qty === 0) continue;
 
-        const avg = iAvg !== -1 ? parseFloat((row[iAvg] || '').replace(/,/g, '')) : NaN;
-        const price = iPrice !== -1 ? parseFloat((row[iPrice] || '').replace(/,/g, '')) : NaN;
+        const avg = iAvg !== -1 ? parseCleanNumber(row[iAvg]) : NaN;
+        const price = iPrice !== -1 ? parseCleanNumber(row[iPrice]) : NaN;
         const action = iAction !== -1 && row[iAction] ? row[iAction].trim().toUpperCase() : 'BUY';
         const rawCap = (iCap !== -1 && row[iCap]) ? row[iCap].trim() : '';
         const cap = resolveMarketCap(name, rawCap);
@@ -859,13 +911,14 @@ function aggregateFromRows(primaryRows, newEntryRows, dashboardRows){
         }
 
         const d = map.get(name);
-        if(isFinite(price) && price > 0){
+        // Only update price if stock had no price yet
+        if((!d.price || d.price <= 0) && isFinite(price) && price > 0){
           d.price = price;
           priceCache[name] = price;
         }
-        if(cap) d.cap = cap;
+        if(cap && !d.cap) d.cap = cap;
 
-        const buyPrice = isFinite(avg) && avg > 0 ? avg : d.price;
+        const buyPrice = isFinite(avg) && avg > 0 ? avg : (isFinite(price) && price > 0 ? price : d.price);
 
         if(action === 'BUY' || !action){
           d.qty += qty;
@@ -880,9 +933,54 @@ function aggregateFromRows(primaryRows, newEntryRows, dashboardRows){
             d.invested = d.qty * cost;
           }
         } else if(action === 'ADJUST'){
-          d.qty += qty;
-          d.invested += qty * buyPrice;
+          d.qty = qty;
+          d.invested = qty * buyPrice;
         }
+      }
+    }
+  }
+
+  // 3. Apply Local User Stock & Price Overrides
+  const userOverrides = loadUserStockOverrides();
+  for(const [overrideName, override] of Object.entries(userOverrides)){
+    const clean = cleanName(overrideName);
+    if(!map.has(clean)){
+      if(override.qty !== undefined && override.qty > 0){
+        const p = override.ltp && override.ltp > 0 ? override.ltp : (override.avgPrice || 0);
+        const avg = override.avgPrice && override.avgPrice > 0 ? override.avgPrice : p;
+        map.set(clean, {
+          name: clean,
+          qty: override.qty,
+          invested: override.qty * avg,
+          price: p,
+          cap: override.cap || resolveMarketCap(clean),
+          baseQty: 0,
+          isNew: true,
+          isUpdated: false
+        });
+        if(p > 0) priceCache[clean] = p;
+      }
+    } else {
+      const d = map.get(clean);
+      if(override.qty !== undefined){
+        d.qty = override.qty;
+        if(override.avgPrice !== undefined && override.avgPrice > 0){
+          d.invested = override.qty * override.avgPrice;
+        } else {
+          const currentAvg = d.qty > 0 ? d.invested / d.qty : d.price;
+          d.invested = override.qty * currentAvg;
+        }
+      } else if(override.avgPrice !== undefined && override.avgPrice > 0){
+        d.invested = d.qty * override.avgPrice;
+      }
+
+      if(override.ltp !== undefined && override.ltp > 0){
+        d.price = override.ltp;
+        priceCache[clean] = override.ltp;
+      }
+
+      if(override.cap){
+        d.cap = override.cap;
       }
     }
   }
@@ -901,7 +999,8 @@ function aggregateFromRows(primaryRows, newEntryRows, dashboardRows){
       name, qty: d.qty, avgPrice, ltp: d.price, invested: d.invested,
       curVal, pnl, pct, cap: resolveMarketCap(name, d.cap),
       priceStale: stale.includes(name),
-      isNew: d.isNew, isUpdated: d.isUpdated, baseQty: d.baseQty
+      isNew: d.isNew, isUpdated: d.isUpdated, baseQty: d.baseQty,
+      isManualOverride: Boolean(userOverrides[cleanName(name)])
     });
   }
   return out;
@@ -1229,22 +1328,35 @@ function render(){
     return `
     <tr>
       <td>
-        ${escapeHtml(h.name)}
+        <span class="stock-clickable" data-stock="${escapeHtml(h.name)}" style="cursor:pointer;font-weight:600;color:var(--text);" title="Click to edit quantity, price, or market cap">${escapeHtml(h.name)}</span>
         <span class="stock-badges">
+          ${h.isManualOverride ? '<span class="badge-tag" style="background:#3A3013;color:#F3D77B;border:1px solid #52441D;" title="Custom manual update active">CUSTOM</span>' : ''}
           ${h.isNew ? '<span class="badge-tag badge-new" title="New stock added in tab gid=994613394">NEW</span>' : ''}
           ${h.isUpdated ? '<span class="badge-tag badge-updated" title="Updated with new entries from tab gid=994613394">UPDATED</span>' : ''}
         </span>
       </td>
-      <td><button class="hide-btn" title="Hide ${escapeHtml(h.name)}" data-hide="${escapeHtml(h.name)}">✕</button></td>
+      <td>
+        <div style="display:flex;gap:4px;justify-content:center;">
+          <button class="hide-btn" title="Edit ${escapeHtml(h.name)}" data-edit="${escapeHtml(h.name)}" style="color:var(--gold);">✎</button>
+          <button class="hide-btn" title="Hide ${escapeHtml(h.name)}" data-hide="${escapeHtml(h.name)}">✕</button>
+        </div>
+      </td>
       <td style="text-align:left;"><span class="cap-badge ${capClass}">${escapeHtml(h.cap)}</span></td>
       <td class="num">${h.qty.toLocaleString('en-IN')}</td>
       <td class="num">${fmt2(h.avgPrice)}</td>
-      <td class="num" ${h.priceStale ? 'style="color:var(--gold)" title="Price fetch failed — showing last known"' : ''}>${fmt2(h.ltp)}${h.priceStale ? ' *' : ''}</td>
+      <td class="num stock-clickable" data-stock="${escapeHtml(h.name)}" style="cursor:pointer;${h.isManualOverride ? 'color:#F3D77B;font-weight:600;' : (h.priceStale ? 'color:var(--gold);' : '')}" title="Click to update price">${fmt2(h.ltp)}${h.isManualOverride ? ' ✎' : (h.priceStale ? ' *' : '')}</td>
       <td class="num">${fmt(h.invested)}</td>
       <td class="num">${fmt(h.curVal)}</td>
       <td class="num"><span class="pct-pill ${h.pct>=0?'up':'down'}">${h.pct>=0?'+':''}${h.pct.toFixed(2)}%</span></td>
     </tr>
   `}).join('');
+
+  tbody.querySelectorAll('.stock-clickable, [data-edit]').forEach(elItem => {
+    elItem.addEventListener('click', () => {
+      const stock = elItem.getAttribute('data-stock') || elItem.getAttribute('data-edit');
+      if(stock) populateManageForm(stock);
+    });
+  });
 
   tbody.querySelectorAll('[data-hide]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1366,20 +1478,117 @@ async function submitBuy(){
 }
 el('submitBuyBtn').addEventListener('click', submitBuy);
 
+function populateManageForm(stockName){
+  if(!stockName) return;
+  const clean = cleanName(stockName);
+  const existing = holdings.find(h => cleanName(h.name) === clean);
+  el('editStock').value = clean;
+  if(existing){
+    el('editQty').value = existing.qty;
+    el('editAvg').value = existing.avgPrice ? existing.avgPrice.toFixed(2) : '';
+    el('editLtp').value = existing.ltp ? existing.ltp.toFixed(2) : '';
+    if(el('editCap')) el('editCap').value = existing.cap || 'Large Cap';
+    el('manageStatus').textContent = `Editing ${clean} (Current LTP: ₹${existing.ltp}, Shares: ${existing.qty}). Updates apply immediately.`;
+  } else {
+    el('manageStatus').textContent = `Enter details for ${clean}.`;
+  }
+  el('managePanel').classList.add('open');
+}
+
 el('manageBtn').addEventListener('click', () => el('managePanel').classList.toggle('open'));
 el('closeManageBtn').addEventListener('click', () => el('managePanel').classList.remove('open'));
-el('addHoldingBtn').addEventListener('click', async () => {
-  const name = el('editStock').value.trim().toUpperCase();
-  const qty = Number(el('editQty').value);
-  const avg = Number(el('editAvg').value);
+
+el('updateHoldingBtn').addEventListener('click', async () => {
+  const name = cleanName(el('editStock').value);
+  const qty = parseCleanNumber(el('editQty').value);
+  const avg = parseCleanNumber(el('editAvg').value);
+  const ltpVal = parseCleanNumber(el('editLtp').value);
+  const capVal = el('editCap') ? el('editCap').value : 'Large Cap';
+
   if(!name || !isFinite(qty) || qty <= 0 || !isFinite(avg) || avg <= 0){
-    el('manageStatus').textContent = 'Enter stock, positive Qty and positive Avg Buy.'; return;
+    el('manageStatus').textContent = 'Enter stock symbol, positive quantity and positive avg buy price.';
+    return;
   }
-  try{
-    await sheetAction({action:'BUY', stock:name, qty, price:avg, date:new Date().toISOString().slice(0,10)});
-    el('manageStatus').textContent = name + ' saved to Google Sheet.';
-  }catch(e){ el('manageStatus').textContent = 'Add failed: ' + e.message; }
+
+  el('manageStatus').textContent = `Applying update for ${name}...`;
+
+  saveUserStockOverride({
+    name,
+    qty,
+    avgPrice: avg,
+    ltp: isFinite(ltpVal) && ltpVal > 0 ? ltpVal : undefined,
+    cap: capVal
+  });
+
+  if(gasUrl){
+    postGas({
+      action: 'ADJUST',
+      stock: name,
+      qty,
+      price: avg,
+      ltp: isFinite(ltpVal) && ltpVal > 0 ? ltpVal : avg,
+      cap: capVal,
+      date: new Date().toISOString().slice(0, 10)
+    }).catch(e => console.warn('Apps Script sync note:', e));
+  }
+
+  await fetchAll();
+  el('manageStatus').textContent = `Successfully updated ${name} and price! Changes active immediately.`;
 });
+
+el('addHoldingBtn').addEventListener('click', async () => {
+  const name = cleanName(el('editStock').value);
+  const qty = parseCleanNumber(el('editQty').value);
+  const avg = parseCleanNumber(el('editAvg').value);
+  const ltpVal = parseCleanNumber(el('editLtp').value);
+  const capVal = el('editCap') ? el('editCap').value : 'Large Cap';
+
+  if(!name || !isFinite(qty) || qty <= 0 || !isFinite(avg) || avg <= 0){
+    el('manageStatus').textContent = 'Enter stock symbol, positive quantity and positive avg buy price.';
+    return;
+  }
+
+  saveUserStockOverride({
+    name,
+    qty,
+    avgPrice: avg,
+    ltp: isFinite(ltpVal) && ltpVal > 0 ? ltpVal : avg,
+    cap: capVal
+  });
+
+  if(gasUrl){
+    sheetAction({action:'BUY', stock:name, qty, price:avg, date:new Date().toISOString().slice(0,10)})
+      .catch(e => console.warn('Apps Script note:', e));
+  }
+
+  await fetchAll();
+  el('manageStatus').textContent = `${name} added to portfolio.`;
+});
+
+el('exitHoldingBtn').addEventListener('click', async () => {
+  const name = cleanName(el('editStock').value);
+  if(!name){ el('manageStatus').textContent = 'Enter stock symbol to exit.'; return; }
+
+  saveUserStockOverride({ name, qty: 0 });
+
+  if(gasUrl){
+    sheetAction({action:'EXIT', stock:name, qty: 0, price: 0, date:new Date().toISOString().slice(0,10)})
+      .catch(e => console.warn('Apps script note:', e));
+  }
+
+  await fetchAll();
+  el('manageStatus').textContent = `Exited position for ${name}.`;
+});
+
+el('revertOverrideBtn').addEventListener('click', async () => {
+  const name = cleanName(el('editStock').value);
+  if(!name){ el('manageStatus').textContent = 'Enter stock symbol to revert.'; return; }
+  removeUserStockOverride(name);
+  await fetchAll();
+  populateManageForm(name);
+  el('manageStatus').textContent = `Reverted ${name} to Google Sheet values.`;
+});
+
 el('reloadSheetBtn').addEventListener('click', async () => {
   try{ await fetchAll(); el('manageStatus').textContent = 'Reloaded combined holdings from both tabs.'; }
   catch(e){ el('manageStatus').textContent = 'Reload failed: ' + e.message; }
