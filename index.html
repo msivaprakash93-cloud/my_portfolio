@@ -546,6 +546,34 @@ function removeUserStockOverride(name){
     const cur = loadUserStockOverrides();
     delete cur[cleanName(name)];
     localStorage.setItem('user-stock-overrides', JSON.stringify(cur));
+    clearUserTransactionsForStock(name);
+  }catch(e){}
+}
+
+function loadUserTransactions(){
+  try{
+    const raw = localStorage.getItem('user-logged-transactions');
+    return raw ? JSON.parse(raw) : [];
+  }catch(e){ return []; }
+}
+
+function saveUserTransaction(tx){
+  const all = loadUserTransactions();
+  const newTx = Object.assign({}, tx, {
+    id: 'tx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+    stock: cleanName(tx.stock),
+    createdAt: new Date().toISOString()
+  });
+  all.push(newTx);
+  try{ localStorage.setItem('user-logged-transactions', JSON.stringify(all)); }catch(e){}
+  return newTx;
+}
+
+function clearUserTransactionsForStock(stockName){
+  try{
+    const clean = cleanName(stockName);
+    const all = loadUserTransactions().filter(t => cleanName(t.stock) !== clean);
+    localStorage.setItem('user-logged-transactions', JSON.stringify(all));
   }catch(e){}
 }
 
@@ -936,6 +964,49 @@ function aggregateFromRows(primaryRows, newEntryRows, dashboardRows){
           d.qty = qty;
           d.invested = qty * buyPrice;
         }
+      }
+    }
+  }
+
+  // 2.5 Ingest locally logged user transactions (instant persistence)
+  const localTransactions = loadUserTransactions();
+  for(const tx of localTransactions){
+    const clean = cleanName(tx.stock);
+    if(!clean) continue;
+
+    const d = map.get(clean);
+    if(!d){
+      if(tx.qty > 0 && tx.action !== 'EXIT'){
+        const p = tx.price > 0 ? tx.price : (priceCache[clean] || 0);
+        map.set(clean, {
+          name: clean,
+          qty: tx.qty,
+          invested: tx.qty * (tx.price > 0 ? tx.price : p),
+          price: p,
+          cap: resolveMarketCap(clean),
+          baseQty: 0,
+          isNew: true,
+          isUpdated: false
+        });
+        if(p > 0) priceCache[clean] = p;
+      }
+    } else {
+      if(tx.action === 'BUY' || !tx.action){
+        d.qty += tx.qty;
+        d.invested += tx.qty * (tx.price > 0 ? tx.price : d.price);
+        d.isUpdated = true;
+      } else if(tx.action === 'SELL'){
+        if(d.qty > 0){
+          const cost = d.invested / d.qty;
+          d.qty = Math.max(0, d.qty - tx.qty);
+          d.invested = d.qty * cost;
+        }
+      } else if(tx.action === 'EXIT'){
+        d.qty = 0;
+        d.invested = 0;
+      } else if(tx.action === 'ADJUST'){
+        d.qty = tx.qty;
+        d.invested = tx.qty * (tx.price > 0 ? tx.price : d.price);
       }
     }
   }
@@ -1456,25 +1527,56 @@ el('saveGasUrlBtn').addEventListener('click', () => {
 });
 
 async function submitBuy(){
-  const stock = el('buyStock').value.trim().toUpperCase();
+  const stock = cleanName(el('buyStock').value);
   const qty = parseFloat(el('buyQty').value);
   const price = parseFloat(el('buyPrice').value);
-  const date = el('buyDate').value;
+  const date = el('buyDate').value || new Date().toISOString().slice(0, 10);
   const statusEl = el('logBuyStatus');
 
-  if(!stock || !isFinite(qty) || qty <= 0 || !isFinite(price) || price <= 0 || !date){
+  if(!stock || !isFinite(qty) || qty <= 0 || !isFinite(price) || price <= 0){
     statusEl.textContent = 'Fill in stock, positive qty, positive price and date.'; return;
   }
-  if(!gasUrl){ statusEl.textContent = 'Add your Apps Script URL above first, then Save URL.'; return; }
 
-  statusEl.textContent = 'Saving buy to Google Sheet…';
-  try{
-    await sheetAction({action:'BUY', stock, qty, price, date});
-    statusEl.textContent = `Saved ${stock} x${qty} @ ₹${price} to Google Sheet.`;
-    el('buyStock').value = ''; el('buyQty').value = ''; el('buyPrice').value = '';
-  }catch(e){
-    statusEl.textContent = 'Save failed: ' + e.message;
+  statusEl.textContent = `Recording buy for ${stock}...`;
+
+  const existing = holdings.find(h => cleanName(h.name) === stock);
+  const curQty = existing ? existing.qty : 0;
+  const curInv = existing ? existing.invested : 0;
+  const newQty = curQty + qty;
+  const newInv = curInv + (qty * price);
+  const newAvg = newQty > 0 ? (newInv / newQty) : price;
+
+  saveUserTransaction({
+    stock,
+    qty,
+    price,
+    date,
+    action: 'BUY'
+  });
+
+  saveUserStockOverride({
+    name: stock,
+    qty: newQty,
+    avgPrice: newAvg,
+    ltp: existing ? existing.ltp : price,
+    cap: existing ? existing.cap : resolveMarketCap(stock)
+  });
+
+  await fetchAll();
+
+  if(gasUrl){
+    try {
+      await postGas({action:'BUY', stock, qty, price, date, cap: existing ? existing.cap : ''});
+      await syncDashboardToSheet(holdings);
+      statusEl.textContent = `✓ Logged ${stock} x${qty} @ ₹${price}! Updated in HTML table (now ${newQty} shares @ ₹${newAvg.toFixed(2)}) & synced to Google Sheet.`;
+    } catch(e) {
+      statusEl.textContent = `✓ Updated ${stock} in HTML table (now ${newQty} shares). Note: Google Sheet sync deferred (${e.message}).`;
+    }
+  } else {
+    statusEl.textContent = `✓ Recorded ${stock} x${qty} @ ₹${price} in HTML table (now ${newQty} shares @ ₹${newAvg.toFixed(2)})! Save your Apps Script URL above to sync with Google Sheet.`;
   }
+
+  el('buyStock').value = ''; el('buyQty').value = ''; el('buyPrice').value = '';
 }
 el('submitBuyBtn').addEventListener('click', submitBuy);
 
@@ -1520,20 +1622,27 @@ el('updateHoldingBtn').addEventListener('click', async () => {
     cap: capVal
   });
 
-  if(gasUrl){
-    postGas({
-      action: 'ADJUST',
-      stock: name,
-      qty,
-      price: avg,
-      ltp: isFinite(ltpVal) && ltpVal > 0 ? ltpVal : avg,
-      cap: capVal,
-      date: new Date().toISOString().slice(0, 10)
-    }).catch(e => console.warn('Apps Script sync note:', e));
-  }
-
   await fetchAll();
-  el('manageStatus').textContent = `Successfully updated ${name} and price! Changes active immediately.`;
+
+  if(gasUrl){
+    try {
+      await postGas({
+        action: 'ADJUST',
+        stock: name,
+        qty,
+        price: avg,
+        ltp: isFinite(ltpVal) && ltpVal > 0 ? ltpVal : avg,
+        cap: capVal,
+        date: new Date().toISOString().slice(0, 10)
+      });
+      await syncDashboardToSheet(holdings);
+      el('manageStatus').textContent = `✓ Updated ${name} (${qty} shares @ ₹${avg}) in HTML & Google Sheet!`;
+    } catch(e) {
+      el('manageStatus').textContent = `✓ Updated ${name} (${qty} shares @ ₹${avg}) in HTML table.`;
+    }
+  } else {
+    el('manageStatus').textContent = `✓ Updated ${name} to ${qty} shares @ ₹${avg} in HTML table!`;
+  }
 });
 
 el('addHoldingBtn').addEventListener('click', async () => {
@@ -1544,25 +1653,46 @@ el('addHoldingBtn').addEventListener('click', async () => {
   const capVal = el('editCap') ? el('editCap').value : 'Large Cap';
 
   if(!name || !isFinite(qty) || qty <= 0 || !isFinite(avg) || avg <= 0){
-    el('manageStatus').textContent = 'Enter stock symbol, positive quantity and positive avg buy price.';
+    el('manageStatus').textContent = 'Enter stock symbol, positive quantity and positive price.';
     return;
   }
 
+  const existing = holdings.find(h => cleanName(h.name) === name);
+  const curQty = existing ? existing.qty : 0;
+  const curInv = existing ? existing.invested : 0;
+  const newQty = curQty + qty;
+  const newInv = curInv + (qty * avg);
+  const newAvg = newQty > 0 ? (newInv / newQty) : avg;
+
+  saveUserTransaction({
+    stock: name,
+    qty,
+    price: avg,
+    date: new Date().toISOString().slice(0, 10),
+    action: 'BUY'
+  });
+
   saveUserStockOverride({
     name,
-    qty,
-    avgPrice: avg,
-    ltp: isFinite(ltpVal) && ltpVal > 0 ? ltpVal : avg,
+    qty: newQty,
+    avgPrice: newAvg,
+    ltp: isFinite(ltpVal) && ltpVal > 0 ? ltpVal : (existing ? existing.ltp : avg),
     cap: capVal
   });
 
-  if(gasUrl){
-    sheetAction({action:'BUY', stock:name, qty, price:avg, date:new Date().toISOString().slice(0,10)})
-      .catch(e => console.warn('Apps Script note:', e));
-  }
-
   await fetchAll();
-  el('manageStatus').textContent = `${name} added to portfolio.`;
+
+  if(gasUrl){
+    try {
+      await postGas({action:'BUY', stock:name, qty, price:avg, date:new Date().toISOString().slice(0,10), cap: capVal});
+      await syncDashboardToSheet(holdings);
+      el('manageStatus').textContent = `✓ Added ${qty} shares to ${name}! Now ${newQty} shares @ ₹${newAvg.toFixed(2)}. Synced to Google Sheet.`;
+    } catch(e) {
+      el('manageStatus').textContent = `✓ Added ${qty} shares to ${name} in HTML table (now ${newQty} shares).`;
+    }
+  } else {
+    el('manageStatus').textContent = `✓ Added ${qty} shares to ${name} in HTML table (now ${newQty} shares @ ₹${newAvg.toFixed(2)})!`;
+  }
 });
 
 el('exitHoldingBtn').addEventListener('click', async () => {
