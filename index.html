@@ -470,20 +470,17 @@ function saveGasUrl(newUrl){
 
 async function postGas(payload){
   if(!gasUrl) throw new Error('Apps Script Web App URL is not configured.');
-  try {
-    await fetch('/api/gas-proxy', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ url: gasUrl, payload })
-    });
-  } catch(e) {
-    await fetch(gasUrl, {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: {'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify(payload)
-    });
-  }
+  // GitHub Pages is static hosting with no server-side routes, so '/api/gas-proxy'
+  // always 404s. fetch() does NOT throw on a 404 (only on network failure), so the
+  // old code treated that dead-end call as success and never actually reached the
+  // Apps Script — meaning nothing was ever written to the Google Sheet. Go straight
+  // to the real endpoint instead.
+  await fetch(gasUrl, {
+    method: 'POST',
+    mode: 'no-cors',
+    headers: {'Content-Type':'text/plain;charset=utf-8'},
+    body: JSON.stringify(payload)
+  });
 }
 
 async function sheetAction(payload){
